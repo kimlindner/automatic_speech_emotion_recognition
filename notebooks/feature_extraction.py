@@ -63,25 +63,51 @@ def average_change_rate(feature):
 
     return np.array(avg_change_rate)
 
-def duration_rising_falling_slopes(feature):
+def rising_falling_slopes(feature):
+    """
+    function that calculates duration of rising and falling slopes of a given feature, i.e. when does the sign of change
+    rate changes?
+    :param feature: numpy array, any feature calculated on the data set
+    :return: tuple, array with duration of rising slopes and array with duration of falling slopes
+    """
     t = librosa.frames_to_time(range(len(feature)), hop_length=HOP_LENGTH)  # convert to times
     avg_change_rate = average_change_rate(feature)
     duration_rising = []
     duration_falling = []
+    value_rising = []
+    value_falling = []
     last_t = 0
+    last_value = feature[0]
     for i, change_rate in enumerate(list(avg_change_rate)):
-        if change_rate > 0 and avg_change_rate[i + 1] < 0:
-            duration_rising.append(t[i + 1] - last_t)
-            duration_falling.append(0)
-            last_t = t[i + 1]
-        elif change_rate < 0 and avg_change_rate[i + 1] > 0:
-            duration_falling.append(t[i + 1] - last_t)
-            duration_rising.append(t[0])
-            last_t = t[i + 1]
+        if i < len(avg_change_rate) - 1:
+            if change_rate > 0 and avg_change_rate[i + 1] < 0:
+                duration_rising.append(t[i + 1] - last_t)
+                duration_falling.append(0)
+                value_rising.append(feature[i + 1] - last_value)
+                value_falling.append(0)
+                last_t = t[i + 1]
+                last_value = feature[i + 1]
+            elif change_rate < 0 and avg_change_rate[i + 1] > 0:
+                duration_falling.append(t[i + 1] - last_t)
+                duration_rising.append(t[0])
+                value_falling.append(feature[i + 1] - last_value)
+                value_rising.append(0)
+                last_t = t[i + 1]
+                last_value = feature[i + 1]
+        # in case of arriving at the last element
+        else:
+            if change_rate > 0:
+                duration_rising.append(t[-1] - last_t)
+                duration_falling.append(0)
+                value_rising.append(feature[-1] - last_value)
+                value_falling.append(0)
+            else:
+                duration_falling.append(t[-1] - last_t)
+                duration_rising.append(0)
+                value_falling.append(feature[-1] - last_value)
+                value_rising.append(0)
 
-            # need to add special case where we are at the last element of avg_change_rate
-    return duration_rising, duration_falling
-
+    return np.array(duration_rising), np.array(duration_falling), np.array(value_rising), np.array(value_falling)
 
 def energy_comp(y):
     """
@@ -480,7 +506,7 @@ def feature_extraction(filename, path):
     zcr = ZCR(y)
     energy = energy_comp(y)
     energy_avg_rate = average_change_rate(energy)
-    duration_rising_energy, duration_falling_energy = duration_rising_falling_slopes(energy)
+    duration_rising_energy, duration_falling_energy, value_rising_energy, value_falling_energy = rising_falling_slopes(energy)
     rms_energy = RMS_energy(y)
     log_rms = RMS_log_entropy(y)
     amplitude = amplitude_envelope(y)
@@ -501,6 +527,8 @@ def feature_extraction(filename, path):
 
     # pitch
     pitch_values, pitch_time = pitch_comp(y_praat)
+    duration_rising_pitch, duration_falling_pitch, value_rising_pitch, value_falling_pitch = rising_falling_slopes(
+        pitch_values) ### need to change time here!!!
 
     # speaking rate, articulation rate, asd
     speaking_dictionary = speech_rate(y_praat)
@@ -517,7 +545,9 @@ def feature_extraction(filename, path):
 
     features_dict = {'file':filename, 'label':label, 'speaker':speaker_num, 'gender':gender, 'duration':duration,
                      'mean':mean, 'median':median, 'max':max, 'min':min, 'var':var, 'std':std, 'zcr':zcr,
-                     'energy':energy, 'energy_avg_rate':energy_avg_rate, 'rms':rms_energy, 'log_rms':log_rms,
+                     'energy':energy, 'energy_avg_rate':energy_avg_rate, 'duration_rising_energy':duration_rising_energy,
+                     'duration_falling_energy':duration_falling_energy, 'value_rising_energy':value_rising_energy,
+                     'value_falling_energy':value_falling_energy, 'rms':rms_energy, 'log_rms':log_rms,
                      'amplitude':amplitude, 'amplitude_avg_rate':amplitude_avg_rate, 'lpc':lpc,
                      'spectral_entropy':spectral_ent, 'shannon_entropy':shannon_ent,
                      'threshold_entropy':threshold_ent, 'log_energy_entropy':log_energy_ent, 'sure_entropy':sure_ent,
@@ -542,6 +572,7 @@ def run_all_files(data_path, result_path):
             i += 1
             bar.update(i)
 
+
     df = pd.DataFrame(final_list)
     df.to_csv(os.path.join(result_path, 'extracted_features.csv'), index=False)
 
@@ -549,11 +580,38 @@ def run_all_files(data_path, result_path):
 
 
 def finalize_features(df):
-    df['f0_max'] = np.max(df['f0'])
-    df['f0_std'] = np.std(df['f0'])
-    df['energy_max'] = np.max(df['energy'])
-    df['energy_mean'] = np.mean(df['energy'])
-    df['energy_var'] = np.var(df['energy'])
+    df['f0_max'] = df['f0'].apply(lambda x: np.max(x))
+    df['f0_std'] = df['f0'].apply(lambda x: np.std(x))
+
+    # calculate statistics of several features
+    statistics_features = ['energy', 'pitch']
+    for feature in statistics_features:
+        df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
+        df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x))
+        df[feature + '_var'] = df[feature].apply(lambda x: np.var(x))
+
+        # calculate maximum, mean, median, and interquartile range of rising and falling slopes of duration and value for
+        # several features
+        for elem in ['duration', 'value']:
+            # clear lists from 0 values
+            df[elem + '_rising_' + feature] = df[elem + '_rising_' + feature].apply(lambda x: x[x != 0])
+            df[elem + '_falling_' + feature] = df[elem + '_falling_' + feature].apply(lambda x: x[x != 0])
+
+            df[feature + '_rising_' + elem + '_max'] = df[elem + '_rising_' + feature].apply(lambda x: np.max(x))
+            df[feature + '_rising_' + elem + '_mean'] = df[elem + '_rising_' + feature].apply(lambda x: np.mean(x))
+            df[feature + '_rising_' + elem + '_median'] = df[elem + '_rising_' + feature].apply(lambda x: np.median(x))
+            df[feature + '_rising_' + elem + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
+                *np.percentile(x, [75, 25])))
+
+            df[feature + '_falling_' + elem + '_max'] = df[elem + '_falling_' + feature].apply(lambda x: np.max(x))
+            df[feature + '_falling_' + elem + '_mean'] = df[elem + '_falling_' + feature].apply(lambda x: np.mean(x))
+            df[feature + '_falling_' + elem + '_median'] = df[elem + '_falling_' + feature].apply(lambda x: np.median(x))
+            df[feature + '_falling_' + elem + '_iqr'] = df[elem + '_falling_' + feature].apply(lambda x: np.subtract(
+                *np.percentile(x, [75, 25])))
+
+            df.drop(columns=[elem + '_rising_' + feature, elem + '_falling_' + feature], inplace=True)
+
+    df.to_csv(os.path.join(result_path, 'extracted_features_modified.csv'), index=False)
 
     return df
 
@@ -566,6 +624,6 @@ if __name__ == "__main__":
 """
 
 
-dict1 = feature_extraction('03a01Fa.wav', data_path)
-#dict2 = run_all_files(data_path, result_path)
+#dict1 = feature_extraction('03a01Fa.wav', data_path)
+dict2 = run_all_files(data_path, result_path)
 test = 0
