@@ -50,33 +50,39 @@ def normalize(x):
     """
     return sklearn.preprocessing.MinMaxScaler().fit_transform(np.array(x).reshape(-1,1)).reshape(1,-1)[0]
 
-def average_change_rate(feature):
+def average_change_rate(feature, times=None):
     """
     calcualtes the average change rate of any feature based on the values form consecutive frames
     :param feature: numpy array, values from a given feature
     :return: numpy array, average change rate per consecutive frames
     """
-    t = librosa.frames_to_time(range(len(feature)), hop_length=HOP_LENGTH) # convert to times
+    if times is None:
+        t = librosa.frames_to_time(range(len(feature)), hop_length=HOP_LENGTH) # convert to time based on feature
+    else:
+        t = times # if times differ from usual time calculation ###
     avg_change_rate = [] # initialize empty list to track values
     for i in range(len(feature) - 1):
         avg_change_rate.append((feature[i + 1] - feature[i]) / (t[i + 1] - t[i]))
 
     return np.array(avg_change_rate)
 
-def rising_falling_slopes(feature):
+def rising_falling_slopes(feature, times=None):
     """
     function that calculates duration of rising and falling slopes of a given feature, i.e. when does the sign of change
     rate changes?
     :param feature: numpy array, any feature calculated on the data set
     :return: tuple, array with duration of rising slopes and array with duration of falling slopes
     """
-    t = librosa.frames_to_time(range(len(feature)), hop_length=HOP_LENGTH)  # convert to times
-    avg_change_rate = average_change_rate(feature)
+    if times is None:
+        t = librosa.frames_to_time(range(len(feature)), hop_length=HOP_LENGTH) # convert to time based on feature
+    else:
+        t = times # if times differ from usual time calculation ###
+    avg_change_rate = average_change_rate(feature, times)
     duration_rising = []
     duration_falling = []
     value_rising = []
     value_falling = []
-    last_t = 0
+    last_t = t[0]
     last_value = feature[0]
     for i, change_rate in enumerate(list(avg_change_rate)):
         if i < len(avg_change_rate) - 1:
@@ -89,7 +95,7 @@ def rising_falling_slopes(feature):
                 last_value = feature[i + 1]
             elif change_rate < 0 and avg_change_rate[i + 1] > 0:
                 duration_falling.append(t[i + 1] - last_t)
-                duration_rising.append(t[0])
+                duration_rising.append(0)
                 value_falling.append(feature[i + 1] - last_value)
                 value_rising.append(0)
                 last_t = t[i + 1]
@@ -252,8 +258,8 @@ def f0_comp(y, sr):
 def pitch_comp(y):
     """
     Fundamental frequency is closely related to pitch, which is defined as our perception of fundamental frequency.
-     F0 describes the actual physical phenomenon; pitch describes how our ears and brains interpret the signal, in terms
-     of periodicity.
+    F0 describes the actual physical phenomenon; pitch describes how our ears and brains interpret the signal, in terms
+    of periodicity.
     :param y:
     :return:
     """
@@ -527,8 +533,9 @@ def feature_extraction(filename, path):
 
     # pitch
     pitch_values, pitch_time = pitch_comp(y_praat)
+    pitch_avg = average_change_rate(pitch_values, times=pitch_time)
     duration_rising_pitch, duration_falling_pitch, value_rising_pitch, value_falling_pitch = rising_falling_slopes(
-        pitch_values) ### need to change time here!!!
+        pitch_values, times=pitch_time) ### need to change time here!!!
 
     # speaking rate, articulation rate, asd
     speaking_dictionary = speech_rate(y_praat)
