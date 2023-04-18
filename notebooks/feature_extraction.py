@@ -324,6 +324,8 @@ def formant_analysis(y, gender, formant_order=4, f0min = 75, f0max = 600):
         form_dict['f' + str(order) + '_var'] = np.var(form_dict['f' + str(order)])
         form_dict['f' + str(order) + '_avg_change_rate'] = average_change_rate(form_dict['f' + str(order)])
 
+        ## rather together in 1 feature?
+
 
         # drop key with all formant numbers
         form_dict.pop('f' + str(order), None)
@@ -629,7 +631,7 @@ def feature_extraction(filename, path):
                      'amplitude':amplitude, 'amplitude_avg_rate':amplitude_avg_rate, 'lpc':lpc,
                      'spectral_entropy':spectral_ent, 'shannon_entropy':shannon_ent, 'threshold_entropy':threshold_ent,
                      'log_energy_entropy':log_energy_ent, 'sure_entropy':sure_ent, 'f0':f0, 'voiced':voiced_flag,
-                     'f0_avg_change_rate':f0_avg_change_rate, 'pitch_values':pitch_values, 'pitch_time':pitch_time,
+                     'f0_avg_change_rate':f0_avg_change_rate, 'pitch':pitch_values, 'pitch_time':pitch_time,
                      'duration_rising_pitch':duration_rising_pitch, 'duration_falling_pitch':duration_falling_pitch,
                      'value_rising_pitch':value_rising_pitch, 'value_falling_pitch':value_falling_pitch,
                      'speaking_rate':speaking_rate, 'articulation_rate':articulation_rate, 'asd':asd,
@@ -666,49 +668,47 @@ def finalize_features(df):
     # calculate statistics for energy and pitch with rising/falling slopes
     statistics_features = ['energy', 'pitch']
     for feature in statistics_features:
-        df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
-        df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x))
-        df[feature + '_var'] = df[feature].apply(lambda x: np.var(x))
+        for index, row in df.iterrows():
+            stats_list = []
+            # create a list with maximum, mean, and variance
+            feature_row = row[feature].copy()
+            stats_list.extend([np.max(feature_row), np.mean(feature_row), np.var(feature_row)])
 
-        # calculate maximum, mean, median, and interquartile range of rising and falling slopes of duration and value for
-        # several features
-        for elem in ['duration', 'value']:
-            # clear lists from 0 values
-            df[elem + '_rising_' + feature] = df[elem + '_rising_' + feature].apply(lambda x: x[x != 0])
-            df[elem + '_falling_' + feature] = df[elem + '_falling_' + feature].apply(lambda x: x[x != 0])
+            # calculate maximum, mean, median, and interquartile range of rising and falling slopes of duration and
+            # value
+            for elem in ['duration', 'value']:
+                # clear lists from 0 values
+                df[elem + '_rising_' + feature] = df[elem + '_rising_' + feature].apply(lambda x: x[x != 0])
+                df[elem + '_falling_' + feature] = df[elem + '_falling_' + feature].apply(lambda x: x[x != 0])
 
-            # max, mean, median, and iqr for rising slopes of feature
-            df[feature + '_rising_' + elem + '_max'] = df[elem + '_rising_' + feature].apply(lambda x: np.max(x))
-            df[feature + '_rising_' + elem + '_mean'] = df[elem + '_rising_' + feature].apply(lambda x: np.mean(x))
-            df[feature + '_rising_' + elem + '_median'] = df[elem + '_rising_' + feature].apply(lambda x: np.median(x))
-            df[feature + '_rising_' + elem + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
-                *np.percentile(x, [75, 25])))
+                # max, mean, median, and iqr for rising slopes of feature
+                feature_row = row[elem + '_rising_' + feature].copy()
+                stats_list.extend([np.max(feature_row), np.mean(feature_row), np.median(feature_row),
+                                   np.subtract(*np.percentile(feature_row, [75, 25]))])
 
-            # max, mean, median, and iqr for falling slopes of feature
-            df[feature + '_falling_' + elem + '_max'] = df[elem + '_falling_' + feature].apply(lambda x: np.max(x))
-            df[feature + '_falling_' + elem + '_mean'] = df[elem + '_falling_' + feature].apply(lambda x: np.mean(x))
-            df[feature + '_falling_' + elem + '_median'] = df[elem + '_falling_' + feature].apply(lambda x: np.median(x))
-            df[feature + '_falling_' + elem + '_iqr'] = df[elem + '_falling_' + feature].apply(lambda x: np.subtract(
-                *np.percentile(x, [75, 25])))
+                # max, mean, median, and iqr for falling slopes of feature
+                feature_row = row[elem + '_falling_' + feature].copy()
+                stats_list.extend([np.max(feature_row), np.mean(feature_row), np.median(feature_row),
+                                   np.subtract(*np.percentile(feature_row, [75, 25]))])
 
-            # actually should all of them be in one column together, i.e. -> 19-dimensional
+                df.loc[[index], feature + '_stats'] = pd.Series([stats_list], index=df.index[[index]])
 
             df.drop(columns=[elem + '_rising_' + feature, elem + '_falling_' + feature], inplace=True)
 
     # calculate statistics of cepstrum coefficients mfccs, lpccs
     cepstrum_coeffs = ['lpccs', 'mfccs']
-    for index, row in df.iterrows():
-        for feature in cepstrum_coeffs:
+    for feature in cepstrum_coeffs:
+        for index, row in df.iterrows():
+            stats_list = []
             for i, coef in enumerate(row[feature]):
-                df.loc[index, feature + str(i) + '_mean'] = np.mean(coef)
-                df.loc[index, feature + str(i) + '_var'] = np.var(coef)
-                df.loc[index, feature + str(i) + '_max'] = np.max(coef)
-                df.loc[index, feature + str(i) + '_min'] = np.min(coef)
-
+                # create a list with mean, variance, maximum, and minumum of all LPCCs/MFCCs respectively
+                stats_list.extend([np.mean(coef), np.var(coef), np.max(coef), np.min(coef)])
+            df.loc[[index], feature + '_stats'] = pd.Series([stats_list], index=df.index[[index]])
 
     df.to_csv(os.path.join(result_path, 'extracted_features_modified.csv'), index=False)
 
     return df
+
 
 """
 if __name__ == "__main__":
