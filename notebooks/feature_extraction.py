@@ -173,6 +173,14 @@ def lpc_est(y, order=4):
     """
     return librosa.lpc(y, order=order)
 
+def lpcc_est(y, order=12):
+    """
+    LPCCs are coefficients obtained by applying Fourier transformation on the logarithmic magnitude spectrum of LPC.
+    :param y:
+    :param order:
+    :return:
+    """
+
 # entropy definitions
 def spectral_entropy(y, sr, center=True):
     """
@@ -480,6 +488,67 @@ def mfcc_comp(y, sr, n):
 
     return mfccs, delta_mfccs, delta2_mfccs
 
+# lpccs
+def autocorr(self, order=None):
+    """
+    code from https://www.kaggle.com/code/sourabhy/working-with-speech
+    :param self:
+    :param order:
+    :return:
+    """
+    if order is None:
+        order = len(self) - 1
+    return [sum(self[n] * self[n + tau] for n in range(len(self) - tau)) for tau in range(order + 1)]
+
+### sieht so bisschen aus wie absolut berechnet; in anderen Beispielen durch Länge und Varianz geteilt (normalisiert)
+
+
+def core_lpcc(seq, err_term, order=None):
+    """
+    code mainly from https://www.kaggle.com/code/sourabhy/working-with-speech, slight changes
+    :param seq:
+    :param err_term:
+    :param order:
+    :return:
+    """
+    if order is None:
+        order = len(seq) - 1
+    lpcc_coeffs = [np.log(err_term), -seq[0]] # lpcc coeffs for i=0,1
+    for n in range(2, order): # lpcc coeffs for i=2,...,order-1 of lpccs
+        # Use order as upper bound for the last iteration (want 0,...,order-1 lpccs)
+        upbound = (order if n > order - 1 else n)
+        lpcc_coef = -sum(i * lpcc_coeffs[i] * seq[n - i - 1]
+                         for i in range(1, upbound)) * 1. / upbound # sum over upper bound - 1
+        lpcc_coef -= seq[n - 1] if n <= len(seq) else 0 # for both cases (m<p and m>p)
+        lpcc_coeffs.append(lpcc_coef)
+    return lpcc_coeffs
+
+
+def lpcc(y, cepsorder):
+    """
+    code from https://www.kaggle.com/code/sourabhy/working-with-speech but changed compuation of error term
+    :param lpcorder:
+    :param cepsorder:
+    :return:
+    """
+    coefs =  librosa.lpc(y, order=cepsorder)
+    acseq =  np.array(autocorr(y, cepsorder))
+    # err_term = np.sqrt(acseq[0] + sum(a * c for a, c in zip(acseq[1:], coefs)))
+    b = np.hstack([[0], -1 * coefs[1:]])
+    y_hat = scipy.signal.lfilter(b, [1], y)
+    err_term = np.sum(np.square(y - y_hat)) # computation from librosa source code
+    return core_lpcc(coefs, err_term, cepsorder)
+
+def lowlevel_lpcc_comp(y, cepsorder):
+    """
+    computes LPCCs on a low level, i.e. LPCCs of order cepsorder for each frame
+    :param y: audio sequence
+    :param cepsorder: order of cepstrum
+    :return:
+    """
+    frames = frames_gen(y)  # generate frames
+    ll_lpccs = [lpcc(frame, cepsorder=cepsorder) for frame in frames]
+    return np.array(ll_lpccs).transpose()
 
 
 
@@ -533,9 +602,8 @@ def feature_extraction(filename, path):
 
     # pitch
     pitch_values, pitch_time = pitch_comp(y_praat)
-    pitch_avg = average_change_rate(pitch_values, times=pitch_time)
     duration_rising_pitch, duration_falling_pitch, value_rising_pitch, value_falling_pitch = rising_falling_slopes(
-        pitch_values, times=pitch_time) ### need to change time here!!!
+        pitch_values, times=pitch_time)
 
     # speaking rate, articulation rate, asd
     speaking_dictionary = speech_rate(y_praat)
@@ -547,7 +615,10 @@ def feature_extraction(filename, path):
     spectral_cent = spectral_centroid(y, sr)
 
     # mfccs
-    mfccs, delta_mfccs, delta2_mfccs = mfcc_comp(y, sr, n=12)
+    mfccs, delta_mfccs, delta2_mfccs = mfcc_comp(y, sr, n=13)
+
+    # lpccs
+    lpccs = lowlevel_lpcc_comp(y, cepsorder=12)
 
 
     features_dict = {'file':filename, 'label':label, 'speaker':speaker_num, 'gender':gender, 'duration':duration,
@@ -556,12 +627,14 @@ def feature_extraction(filename, path):
                      'duration_falling_energy':duration_falling_energy, 'value_rising_energy':value_rising_energy,
                      'value_falling_energy':value_falling_energy, 'rms':rms_energy, 'log_rms':log_rms,
                      'amplitude':amplitude, 'amplitude_avg_rate':amplitude_avg_rate, 'lpc':lpc,
-                     'spectral_entropy':spectral_ent, 'shannon_entropy':shannon_ent,
-                     'threshold_entropy':threshold_ent, 'log_energy_entropy':log_energy_ent, 'sure_entropy':sure_ent,
-                     'f0':f0, 'voiced':voiced_flag, 'f0_avg_change_rate':f0_avg_change_rate, 'pitch_values':pitch_values,
-                     'pitch_time':pitch_time, 'speaking_rate':speaking_rate, 'articulation_rate':articulation_rate, 'asd':asd,
+                     'spectral_entropy':spectral_ent, 'shannon_entropy':shannon_ent, 'threshold_entropy':threshold_ent,
+                     'log_energy_entropy':log_energy_ent, 'sure_entropy':sure_ent, 'f0':f0, 'voiced':voiced_flag,
+                     'f0_avg_change_rate':f0_avg_change_rate, 'pitch_values':pitch_values, 'pitch_time':pitch_time,
+                     'duration_rising_pitch':duration_rising_pitch, 'duration_falling_pitch':duration_falling_pitch,
+                     'value_rising_pitch':value_rising_pitch, 'value_falling_pitch':value_falling_pitch,
+                     'speaking_rate':speaking_rate, 'articulation_rate':articulation_rate, 'asd':asd,
                      'spectral_centroid':spectral_cent, 'mfccs':mfccs, 'delta_mfccs':delta_mfccs,
-                     'delta2_mfccs':delta2_mfccs} | formants
+                     'delta2_mfccs':delta2_mfccs, 'lpccs':lpccs} | formants
 
     return features_dict
 
@@ -590,7 +663,7 @@ def finalize_features(df):
     df['f0_max'] = df['f0'].apply(lambda x: np.max(x))
     df['f0_std'] = df['f0'].apply(lambda x: np.std(x))
 
-    # calculate statistics of several features
+    # calculate statistics for energy and pitch with rising/falling slopes
     statistics_features = ['energy', 'pitch']
     for feature in statistics_features:
         df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
@@ -604,19 +677,34 @@ def finalize_features(df):
             df[elem + '_rising_' + feature] = df[elem + '_rising_' + feature].apply(lambda x: x[x != 0])
             df[elem + '_falling_' + feature] = df[elem + '_falling_' + feature].apply(lambda x: x[x != 0])
 
+            # max, mean, median, and iqr for rising slopes of feature
             df[feature + '_rising_' + elem + '_max'] = df[elem + '_rising_' + feature].apply(lambda x: np.max(x))
             df[feature + '_rising_' + elem + '_mean'] = df[elem + '_rising_' + feature].apply(lambda x: np.mean(x))
             df[feature + '_rising_' + elem + '_median'] = df[elem + '_rising_' + feature].apply(lambda x: np.median(x))
             df[feature + '_rising_' + elem + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
                 *np.percentile(x, [75, 25])))
 
+            # max, mean, median, and iqr for falling slopes of feature
             df[feature + '_falling_' + elem + '_max'] = df[elem + '_falling_' + feature].apply(lambda x: np.max(x))
             df[feature + '_falling_' + elem + '_mean'] = df[elem + '_falling_' + feature].apply(lambda x: np.mean(x))
             df[feature + '_falling_' + elem + '_median'] = df[elem + '_falling_' + feature].apply(lambda x: np.median(x))
             df[feature + '_falling_' + elem + '_iqr'] = df[elem + '_falling_' + feature].apply(lambda x: np.subtract(
                 *np.percentile(x, [75, 25])))
 
+            # actually should all of them be in one column together, i.e. -> 19-dimensional
+
             df.drop(columns=[elem + '_rising_' + feature, elem + '_falling_' + feature], inplace=True)
+
+    # calculate statistics of cepstrum coefficients mfccs, lpccs
+    cepstrum_coeffs = ['lpccs', 'mfccs']
+    for index, row in df.iterrows():
+        for feature in cepstrum_coeffs:
+            for i, coef in enumerate(row[feature]):
+                df.loc[index, feature + str(i) + '_mean'] = np.mean(coef)
+                df.loc[index, feature + str(i) + '_var'] = np.var(coef)
+                df.loc[index, feature + str(i) + '_max'] = np.max(coef)
+                df.loc[index, feature + str(i) + '_min'] = np.min(coef)
+
 
     df.to_csv(os.path.join(result_path, 'extracted_features_modified.csv'), index=False)
 
@@ -633,4 +721,10 @@ if __name__ == "__main__":
 
 #dict1 = feature_extraction('03a01Fa.wav', data_path)
 dict2 = run_all_files(data_path, result_path)
+
+
+
+audio1_path = os.path.join(data_path, "03a01Fa.wav")
+audio1, sample_rate1 = librosa.load(audio1_path, sr=None)
+
 test = 0
