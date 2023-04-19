@@ -552,6 +552,43 @@ def lowlevel_lpcc_comp(y, cepsorder):
     ll_lpccs = [lpcc(frame, cepsorder=cepsorder) for frame in frames]
     return np.array(ll_lpccs).transpose()
 
+# lpcmfcc
+def lpcmfcc_comp(lpccs, alpha=0.35, order_n=None):
+    """
+    computes LPCMFCCs based on the given LPCC coefficients recursively with order_n iterations going down
+    :param lpccs: list of size cepsorder; computed LPCC coefficients
+    :param alpha: float; usually between 0.31 and 0.35 to be close to Mel scale
+    :param order_n: int; number of iterations, generally equal to order of LPCCs
+    :return: list of size cepsorder; LPCMFCC coefficients from last iteration at n=0
+    """
+    order_k = len(lpccs)
+    if order_n == None:
+        order_n = order_k
+
+    # initialize MCs(n) at iteration n = k (use order - 1 because we are going from 0)
+    melcep_coefs = [lpccs[order_n - 1]]
+    melcep_coefs.extend(np.zeros(order_k - 1))
+
+    for n in range(order_n - 2, -1, -1):  # order_n iterations going down to 0
+        melcep_coefs_old = melcep_coefs.copy()
+        melcep_coefs[0] = lpccs[n] + alpha * melcep_coefs_old[0]
+        melcep_coefs[1] = (1 - alpha) ** 2 * melcep_coefs_old[0] + alpha * melcep_coefs_old[1]
+        for k in range(2, order_k):  # order_k coefficients to compute
+            melcep_coefs[k] = melcep_coefs_old[k - 1] + alpha * (melcep_coefs_old[k] - melcep_coefs[k - 1])
+
+    return melcep_coefs
+
+def lowlevel_lpcmfcc_comp(lpccs_local, alpha=0.35, order_n=None):
+    """
+    computes LPCMFCCs on a low level, i.e. taking the computed LPCCs from each frame and computing LPCMFCCs for that
+    frame
+    :param lpccs_local: numpy array of shape (cepsorder, number of frames); all LPCCs per frame
+    :param alpha: float; usually between 0.31 and 0.35 to be close to Mel scale
+    :param order_n: int; number of iterations, generally equal to order of LPCCs
+    :return: numpy array of shape (cepsorder, number of frames); all LPCMFCCs per frame
+    """
+    ll_lpcmfccs = [lpcmfcc_comp(lpccs_frame, alpha=alpha, order_n=order_n) for lpccs_frame in lpccs_local.transpose()]
+    return np.array(ll_lpcmfccs).transpose()
 
 
 def feature_extraction(filename, path):
@@ -616,11 +653,12 @@ def feature_extraction(filename, path):
     # brightness (spectral centroid)
     spectral_cent = spectral_centroid(y, sr)
 
-    # mfccs
+    # mfccs, lpccs, lpcmfccs
     mfccs, delta_mfccs, delta2_mfccs = mfcc_comp(y, sr, n=13)
-
-    # lpccs
-    lpccs = lowlevel_lpcc_comp(y, cepsorder=12)
+    lpccs_global = lpcc(y, cepsorder=12)
+    lpcmfccs_global = lpcmfcc_comp(lpccs_global)
+    lpccs_local = lowlevel_lpcc_comp(y, cepsorder=12)
+    lpcmfccs_local = lowlevel_lpcmfcc_comp(lpccs_local)
 
 
     features_dict = {'file':filename, 'label':label, 'speaker':speaker_num, 'gender':gender, 'duration':duration,
@@ -636,7 +674,8 @@ def feature_extraction(filename, path):
                      'value_rising_pitch':value_rising_pitch, 'value_falling_pitch':value_falling_pitch,
                      'speaking_rate':speaking_rate, 'articulation_rate':articulation_rate, 'asd':asd,
                      'spectral_centroid':spectral_cent, 'mfccs':mfccs, 'delta_mfccs':delta_mfccs,
-                     'delta2_mfccs':delta2_mfccs, 'lpccs':lpccs} | formants
+                     'delta2_mfccs':delta2_mfccs, 'lpccs_local':lpccs_local, 'lpccs_global':lpccs_global,
+                     'lpcmfccs_global':lpcmfccs_global, 'lpcmfccs_local':lpcmfccs_local} | formants
 
     return features_dict
 
@@ -696,12 +735,12 @@ def finalize_features(df):
             df.drop(columns=[elem + '_rising_' + feature, elem + '_falling_' + feature], inplace=True)
 
     # calculate statistics of cepstrum coefficients mfccs, lpccs
-    cepstrum_coeffs = ['lpccs', 'mfccs']
+    cepstrum_coeffs = ['mfccs', 'lpccs_local', 'lpcmfccs_local']
     for feature in cepstrum_coeffs:
         for index, row in df.iterrows():
             stats_list = []
             for i, coef in enumerate(row[feature]):
-                # create a list with mean, variance, maximum, and minumum of all LPCCs/MFCCs respectively
+                # create a list with mean, variance, maximum, and minumum of all MFCCs/LPCCs/LPCMFCCs respectively
                 stats_list.extend([np.mean(coef), np.var(coef), np.max(coef), np.min(coef)])
             df.loc[[index], feature + '_stats'] = pd.Series([stats_list], index=df.index[[index]])
 
