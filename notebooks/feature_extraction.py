@@ -10,6 +10,7 @@ import librosa
 import antropy as ant # for entropy computation
 import scipy
 from scipy.stats import entropy
+from scipy.stats import skew
 import parselmouth
 from parselmouth import praat
 from parselmouth.praat import call
@@ -709,9 +710,9 @@ def finalize_features(df):
     for feature in statistics_features:
         for index, row in df.iterrows():
             stats_list = []
-            # create a list with maximum, mean, and variance
+            # create a list with maximum, mean, variance
             feature_row = row[feature].copy()
-            stats_list.extend([np.max(feature_row), np.mean(feature_row), np.var(feature_row)])
+            stats_list.extend([np.max(feature_row), np.mean(feature_row), np.var(feature_row)]) ### in paper 4: they completely ignore 0 values -> should we do it for all?
 
             # calculate maximum, mean, median, and interquartile range of rising and falling slopes of duration and
             # value
@@ -734,6 +735,13 @@ def finalize_features(df):
 
             df.drop(columns=[elem + '_rising_' + feature, elem + '_falling_' + feature], inplace=True)
 
+    # further stats for pitch, energy
+    df['pitch_values_non0'] = df['pitch_values'].apply(lambda x: x[x != 0])
+    df['skew_log_pitch'] = df['pitch_values_non0'].apply(lambda x: skew(np.log(x)))
+    df['range_log_pitch'] = df['pitch_values_non0'].apply(lambda x: np.abs((np.max(x) - np.min(x))))
+    df['energy_non0'] = df['energy'].apply(lambda x: x[x != 0])
+    df['range_log_energy'] = df['energy_non0'].apply(lambda x: np.abs((np.max(x) - np.min(x))))
+
     # calculate statistics of cepstrum coefficients mfccs, lpccs
     cepstrum_coeffs = ['mfccs', 'lpccs_local', 'lpcmfccs_local']
     for feature in cepstrum_coeffs:
@@ -743,6 +751,7 @@ def finalize_features(df):
                 # create a list with mean, variance, maximum, and minumum of all MFCCs/LPCCs/LPCMFCCs respectively
                 stats_list.extend([np.mean(coef), np.var(coef), np.max(coef), np.min(coef)])
             df.loc[[index], feature + '_stats'] = pd.Series([stats_list], index=df.index[[index]])
+
 
     df.to_csv(os.path.join(result_path, 'extracted_features_modified.csv'), index=False)
 
