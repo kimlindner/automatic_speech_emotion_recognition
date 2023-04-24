@@ -14,6 +14,8 @@ from scipy.stats import skew
 import parselmouth
 from parselmouth import praat
 from parselmouth.praat import call
+import torchaudio
+from torchaudio.transforms import LFCC
 
 
 data_path = os.path.join(str(Path(__file__).parents[1]), 'data/wav')
@@ -21,6 +23,7 @@ result_path = os.path.join(str(Path(__file__).parents[1]), 'results')
 
 HOP_LENGTH = 512
 FRAME_LENGTH = 2048
+### checken, ob globale Variablen überall drin!
 
 # general functions
 def frames_gen(y, center=True, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH, pad_mode="constant"):
@@ -53,7 +56,7 @@ def normalize(x):
 
 def average_change_rate(feature, times=None):
     """
-    calcualtes the average change rate of any feature based on the values form consecutive frames
+    calcualtes the average change rate of any feature based on the values from consecutive frames
     :param feature: numpy array, values from a given feature
     :return: numpy array, average change rate per consecutive frames
     """
@@ -174,14 +177,6 @@ def lpc_est(y, order=4):
     """
     return librosa.lpc(y, order=order)
 
-def lpcc_est(y, order=12):
-    """
-    LPCCs are coefficients obtained by applying Fourier transformation on the logarithmic magnitude spectrum of LPC.
-    :param y:
-    :param order:
-    :return:
-    """
-
 # entropy definitions
 def spectral_entropy(y, sr, center=True):
     """
@@ -194,7 +189,8 @@ def spectral_entropy(y, sr, center=True):
     :return:
     """
     frames = frames_gen(y, center=center)
-    spectral = [ant.spectral_entropy(frame, sf=sr, method='welch', normalize=True) for frame in frames]
+    with np.errstate(divide='ignore', invalid='ignore'): # ignore division warinings here, will anyways return 0
+        spectral = [ant.spectral_entropy(frame, sf=sr, method='welch', normalize=True) for frame in frames]
     return np.array(spectral)
 
 def shannon_entropy(y, base=None):
@@ -260,7 +256,8 @@ def f0_comp(y, sr):
     :param sr:
     :return:
     """
-    f0, voiced_flag, voiced_prob = librosa.pyin(y=y, sr=sr, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'), hop_length=HOP_LENGTH)
+    f0, voiced_flag, voiced_prob = librosa.pyin(y=y, sr=sr, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7')
+                                                , hop_length=HOP_LENGTH)
     f0 = np.nan_to_num(f0) # convert nan values to 0
     return f0, voiced_flag, voiced_prob
 
@@ -317,19 +314,13 @@ def formant_analysis(y, gender, formant_order=4, f0min = 75, f0max = 600):
             if str(formant) != 'nan':
                 form_dict['f' + str(order)].append(formant)
 
-        # calculate median, max, and mean of the given formants
+        # calculate statistics of the given formants
         form_dict['f' + str(order) + '_median'] = np.median(form_dict['f' + str(order)])
         form_dict['f' + str(order) + '_max'] = np.max(form_dict['f' + str(order)])
         form_dict['f' + str(order) + '_mean'] = np.mean(form_dict['f' + str(order)])
         form_dict['f' + str(order) + '_std'] = np.std(form_dict['f' + str(order)])
         form_dict['f' + str(order) + '_var'] = np.var(form_dict['f' + str(order)])
         form_dict['f' + str(order) + '_avg_change_rate'] = average_change_rate(form_dict['f' + str(order)])
-
-        ## rather together in 1 feature?
-
-
-        # drop key with all formant numbers
-        form_dict.pop('f' + str(order), None)
 
     return form_dict
 
@@ -341,7 +332,7 @@ def speech_rate(sound):
     nuclei and measure speech rate automatically. Behavior research methods, 41 (2), 385 - 390.
     Updated by Hugo Quené, Ingrid Persoon, & Nivja de Jong in 2017 and translated to Python with Parselmouth by David
     Feinberg in 2019.
-    Only slight changes made.
+    Only slight changes made. It seems sufficient to calculate the overall rates for emotion detection and not per frame.
     :param sound: sound loaded with praat
     :return: dictionary containing number of voiced syllables, number of pauses, original duration, intensity duration,
     speaking rate, articulation rate, and average syllable duration (asd)
@@ -485,64 +476,50 @@ def mfcc_comp(y, sr, n):
     :return: tuple with standard, first, and second order derivative mfccs, each contains a (n,feature length))-
     dimensional array with n entries per short-frame
     """
-    mfccs = librosa.feature.mfcc(y=y, n_mfcc=n, sr=sr)
+    mfccs = librosa.feature.mfcc(y=y, n_mfcc=n, sr=sr, n_fft=FRAME_LENGTH, hop_length=HOP_LENGTH)
     delta_mfccs = librosa.feature.delta(mfccs)
     delta2_mfccs = librosa.feature.delta(mfccs, order=2)
 
     return mfccs, delta_mfccs, delta2_mfccs
 
 # lpccs
-def autocorr(self, order=None):
+def lpcc(y, lpc_order, cepsorder=None):
     """
-    code from https://www.kaggle.com/code/sourabhy/working-with-speech
-    :param self:
-    :param order:
-    :return:
+    Code partly from https://www.kaggle.com/code/sourabhy/working-with-speech.
+    Code based on algorithm from Rao et al. (2015).Language Identification Using Spectral and Prosodic Features.
+    (https://link.springer.com/content/pdf/bbm:978-3-319-17163-0/1.pdf) &
+    Al-Alaoui et al. (2008). Speech Recognition using Artificial Neural Networks and Hidden Markov Models.
+    (https://feaweb.aub.edu.lb/research/dsaf/Publications/IMCL114.pdf) &
+    Matlab ressouce https://de.mathworks.com/help/dsp/ref/lpctofromcepstralcoefficients.html.
+    :param y: librosa audio
+    :param lpc_order: int; LPC coefficients order
+    :param cepsorder: int; LPCC coefficients order
+    :return: list; LPCC coefficients for the given sequence y
     """
-    if order is None:
-        order = len(self) - 1
-    return [sum(self[n] * self[n + tau] for n in range(len(self) - tau)) for tau in range(order + 1)]
+    # compute LPC coefficients
+    coefs = lpc_est(y, lpc_order)
 
-### sieht so bisschen aus wie absolut berechnet; in anderen Beispielen durch Länge und Varianz geteilt (normalisiert)
-
-
-def core_lpcc(seq, err_term, order=None):
-    """
-    code mainly from https://www.kaggle.com/code/sourabhy/working-with-speech, slight changes
-    :param seq:
-    :param err_term:
-    :param order:
-    :return:
-    """
-    if order is None:
-        order = len(seq) - 1
-    lpcc_coeffs = [np.log(err_term), -seq[0]] # lpcc coeffs for i=0,1
-    for n in range(2, order): # lpcc coeffs for i=2,...,order-1 of lpccs
-        # Use order as upper bound for the last iteration (want 0,...,order-1 lpccs)
-        upbound = (order if n > order - 1 else n)
-        lpcc_coef = -sum(i * lpcc_coeffs[i] * seq[n - i - 1]
-                         for i in range(1, upbound)) * 1. / upbound # sum over upper bound - 1
-        lpcc_coef -= seq[n - 1] if n <= len(seq) else 0 # for both cases (m<p and m>p)
-        lpcc_coeffs.append(lpcc_coef)
-    return lpcc_coeffs
-
-
-def lpcc(y, cepsorder):
-    """
-    code from https://www.kaggle.com/code/sourabhy/working-with-speech but changed compuation of error term
-    :param lpcorder:
-    :param cepsorder:
-    :return:
-    """
-    coefs =  librosa.lpc(y, order=cepsorder)
-    acseq =  np.array(autocorr(y, cepsorder))
-    # err_term = np.sqrt(acseq[0] + sum(a * c for a, c in zip(acseq[1:], coefs)))
+    # compute error term with librosa source code
     b = np.hstack([[0], -1 * coefs[1:]])
     y_hat = scipy.signal.lfilter(b, [1], y)
-    err_term = np.sum(np.square(y - y_hat)) # computation from librosa source code
-    return core_lpcc(coefs, err_term, cepsorder)
+    err_term = np.sum(np.square(y - y_hat))
 
-def lowlevel_lpcc_comp(y, cepsorder):
+    # compute LPCCs
+    if cepsorder is None:
+        cepsorder = len(coefs) - 1
+
+    lpcc_coeffs = [np.log(err_term) if err_term != 0 else coefs[0]] # lpcc coeffs for i=0,1
+    for n in range(1, cepsorder): # lpcc coeffs for i=1,...,order-1 of lpccs
+        # Use order as upper bound for the last iteration (want 0,...,order-1 lpccs)
+        upbound = (cepsorder if n > cepsorder - 1 else n)
+        lpcc_coef = sum(i * lpcc_coeffs[i] * coefs[n - i]
+                         for i in range(1, upbound)) * 1. / upbound # sum over upper bound - 1
+        lpcc_coef += coefs[n] if n <= len(coefs) else 0 # for both cases (m<p and m>p)
+        lpcc_coeffs.append(lpcc_coef)
+
+    return lpcc_coeffs
+
+def lowlevel_lpcc_comp(y, lpc_order, cepsorder=None):
     """
     computes LPCCs on a low level, i.e. LPCCs of order cepsorder for each frame
     :param y: audio sequence
@@ -550,7 +527,7 @@ def lowlevel_lpcc_comp(y, cepsorder):
     :return:
     """
     frames = frames_gen(y)  # generate frames
-    ll_lpccs = [lpcc(frame, cepsorder=cepsorder) for frame in frames]
+    ll_lpccs = [lpcc(frame, lpc_order, cepsorder=cepsorder) for frame in frames]
     return np.array(ll_lpccs).transpose()
 
 # lpcmfcc
@@ -591,6 +568,22 @@ def lowlevel_lpcmfcc_comp(lpccs_local, alpha=0.35, order_n=None):
     ll_lpcmfccs = [lpcmfcc_comp(lpccs_frame, alpha=alpha, order_n=order_n) for lpccs_frame in lpccs_local.transpose()]
     return np.array(ll_lpcmfccs).transpose()
 
+# lfccs
+def lfcc_comp(y, sr, n_lfcc, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
+    """
+    Computes LFCCs (Linear Frequency Cepstral Coefficients) with torchaudio, i.e. spectral energy dynamic coefficients
+    of equally spaced frequency bands. MFCCs are calculated on the Mel scale using Melspectrogram but LFCCs are based on
+    Spectrogram
+    :param y: torchaudio sound
+    :param sr: int; sampling rate
+    :param n_lfcc: int; order of LFCCs, i.e. number of coefficients to compute
+    :param frame_length: int
+    :param hop_length: int
+    :return: numpy array of size (n_lfcc, number of frames); LFCC coefficients per frame
+    """
+    lfccs = LFCC(sample_rate=sr, n_lfcc=n_lfcc, speckwargs={"n_fft": frame_length, "hop_length": hop_length,
+                                                                 'pad_mode': 'constant'})(y)
+    return lfccs.numpy()[0] # convert tensor to numpy array
 
 def feature_extraction(filename, path):
     """
@@ -600,8 +593,9 @@ def feature_extraction(filename, path):
     :return:
     """
     audio_path = os.path.join(path, filename)
-    y, sr = librosa.load(audio_path, sr=None) # load audio data
-    y_praat = parselmouth.Sound(audio_path)  # load praat sound
+    y, sr = librosa.load(audio_path, sr=None) # load librosa audio
+    y_praat = parselmouth.Sound(audio_path)  # load praat audio
+    y_torch, sr_torch = torchaudio.load(audio_path) # load torch audio
 
     label_dict = {'W':'anger', 'L':'boredom', 'E':'disgust', 'A':'fear', 'F':'happiness', 'T':'sadness', 'N':'neutral'}
     label = label_dict[filename[5]]
@@ -620,19 +614,19 @@ def feature_extraction(filename, path):
 
     zcr = ZCR(y)
     energy = energy_comp(y)
-    energy_avg_rate = average_change_rate(energy)
+    energy_avg_change_rate = average_change_rate(energy)
     duration_rising_energy, duration_falling_energy, value_rising_energy, value_falling_energy = rising_falling_slopes(energy)
     rms_energy = RMS_energy(y)
     log_rms = RMS_log_entropy(y)
     amplitude = amplitude_envelope(y)
-    amplitude_avg_rate = average_change_rate(amplitude)
+    amplitude_avg_change_rate = average_change_rate(amplitude)
     lpc = lpc_est(y)
 
     # entropy computations
     spectral_ent = spectral_entropy(y, sr)
+    log_energy_ent = log_energy_entropy(y)
     shannon_ent = shannon_entropy(y)
     threshold_ent = threshold_entropy(y)
-    log_energy_ent = log_energy_entropy(y)
     sure_ent = sure_entropy(y)
 
     # f0, formants
@@ -654,20 +648,21 @@ def feature_extraction(filename, path):
     # brightness (spectral centroid)
     spectral_cent = spectral_centroid(y, sr)
 
-    # mfccs, lpccs, lpcmfccs
+    # mfccs, lpccs, lpcmfccs, lfccs
     mfccs, delta_mfccs, delta2_mfccs = mfcc_comp(y, sr, n=13)
-    lpccs_global = lpcc(y, cepsorder=12)
+    lpccs_global = lpcc(y, lpc_order=12, cepsorder=12)
+    lpccs_local = lowlevel_lpcc_comp(y, lpc_order=12, cepsorder=12)
     lpcmfccs_global = lpcmfcc_comp(lpccs_global)
-    lpccs_local = lowlevel_lpcc_comp(y, cepsorder=12)
     lpcmfccs_local = lowlevel_lpcmfcc_comp(lpccs_local)
+    lfccs = lfcc_comp(y_torch, sr_torch, n_lfcc=12)
 
 
     features_dict = {'file':filename, 'label':label, 'speaker':speaker_num, 'gender':gender, 'duration':duration,
                      'mean':mean, 'median':median, 'max':max, 'min':min, 'var':var, 'std':std, 'zcr':zcr,
-                     'energy':energy, 'energy_avg_rate':energy_avg_rate, 'duration_rising_energy':duration_rising_energy,
+                     'energy':energy, 'energy_avg_change_rate':energy_avg_change_rate, 'duration_rising_energy':duration_rising_energy,
                      'duration_falling_energy':duration_falling_energy, 'value_rising_energy':value_rising_energy,
                      'value_falling_energy':value_falling_energy, 'rms':rms_energy, 'log_rms':log_rms,
-                     'amplitude':amplitude, 'amplitude_avg_rate':amplitude_avg_rate, 'lpc':lpc,
+                     'amplitude':amplitude, 'amplitude_avg_change_rate':amplitude_avg_change_rate, 'lpc':lpc,
                      'spectral_entropy':spectral_ent, 'shannon_entropy':shannon_ent, 'threshold_entropy':threshold_ent,
                      'log_energy_entropy':log_energy_ent, 'sure_entropy':sure_ent, 'f0':f0, 'voiced':voiced_flag,
                      'f0_avg_change_rate':f0_avg_change_rate, 'pitch':pitch_values, 'pitch_time':pitch_time,
@@ -676,11 +671,11 @@ def feature_extraction(filename, path):
                      'speaking_rate':speaking_rate, 'articulation_rate':articulation_rate, 'asd':asd,
                      'spectral_centroid':spectral_cent, 'mfccs':mfccs, 'delta_mfccs':delta_mfccs,
                      'delta2_mfccs':delta2_mfccs, 'lpccs_local':lpccs_local, 'lpccs_global':lpccs_global,
-                     'lpcmfccs_global':lpcmfccs_global, 'lpcmfccs_local':lpcmfccs_local} | formants
+                     'lpcmfccs_global':lpcmfccs_global, 'lpcmfccs_local':lpcmfccs_local, 'lfccs':lfccs} | formants
 
     return features_dict
 
-def run_all_files(data_path, result_path):
+def run_all_files(data_path, result_path, result_name):
     audio_files = os.listdir(data_path)
 
     # create an final list to store all results and convert to dataframe
@@ -696,83 +691,78 @@ def run_all_files(data_path, result_path):
 
 
     df = pd.DataFrame(final_list)
-    df.to_csv(os.path.join(result_path, 'extracted_features.csv'), index=False)
+    df.to_pickle(os.path.join(result_path, result_name))
+    print('Features extracted. File written to {}'.format(result_name))
 
     return df
 
 
-def finalize_features(df):
+def finalize_features(result_path, input_name, result_name):
+    """
+    finalizes the feature extraction part with some statistical calculations
+    :param result_path: path where results are stored
+    :param input_name: name of the created feature extraction file
+    :param result_name: name of the modified feature extraction file
+    :return: finalized dataframe
+    """
+    print('Modify extracted features by adding statistical calculations')
+    df = pd.read_pickle(os.path.join(result_path, input_name))
+
     df['f0_max'] = df['f0'].apply(lambda x: np.max(x))
     df['f0_std'] = df['f0'].apply(lambda x: np.std(x))
 
     # calculate statistics for energy and pitch with rising/falling slopes
     statistics_features = ['energy', 'pitch']
     for feature in statistics_features:
-        for index, row in df.iterrows():
-            stats_list = []
-            # create a list with maximum, mean, variance
-            feature_row = row[feature].copy()
-            stats_list.extend([np.max(feature_row), np.mean(feature_row), np.var(feature_row)]) ### in paper 4: they completely ignore 0 values -> should we do it for all?
+        for elem in ['duration', 'value']:
+            for index, row in df.iterrows():
+                stats_list = []
+                # create a list with maximum, mean, variance
+                feature_row = row[feature].copy()
+                stats_list.extend([np.max(feature_row), np.mean(feature_row), np.var(feature_row)]) ### in paper 4: they completely ignore 0 values -> should we do it for all?
 
-            # calculate maximum, mean, median, and interquartile range of rising and falling slopes of duration and
-            # value
-            for elem in ['duration', 'value']:
-                # clear lists from 0 values
-                df[elem + '_rising_' + feature] = df[elem + '_rising_' + feature].apply(lambda x: x[x != 0])
-                df[elem + '_falling_' + feature] = df[elem + '_falling_' + feature].apply(lambda x: x[x != 0])
+                # calculate maximum, mean, median, and interquartile range of rising and falling slopes of duration and
+                # value
 
                 # max, mean, median, and iqr for rising slopes of feature
                 feature_row = row[elem + '_rising_' + feature].copy()
+                feature_row = feature_row[feature_row != 0] # clear lists from 0 values
                 stats_list.extend([np.max(feature_row), np.mean(feature_row), np.median(feature_row),
                                    np.subtract(*np.percentile(feature_row, [75, 25]))])
 
                 # max, mean, median, and iqr for falling slopes of feature
                 feature_row = row[elem + '_falling_' + feature].copy()
+                feature_row = feature_row[feature_row != 0]  # clear lists from 0 values
                 stats_list.extend([np.max(feature_row), np.mean(feature_row), np.median(feature_row),
                                    np.subtract(*np.percentile(feature_row, [75, 25]))])
 
                 df.loc[[index], feature + '_stats'] = pd.Series([stats_list], index=df.index[[index]])
 
-            df.drop(columns=[elem + '_rising_' + feature, elem + '_falling_' + feature], inplace=True)
-
     # further stats for pitch, energy
-    df['pitch_values_non0'] = df['pitch_values'].apply(lambda x: x[x != 0])
-    df['skew_log_pitch'] = df['pitch_values_non0'].apply(lambda x: skew(np.log(x)))
-    df['range_log_pitch'] = df['pitch_values_non0'].apply(lambda x: np.abs((np.max(x) - np.min(x))))
+    df['pitch_non0'] = df['pitch'].apply(lambda x: x[x != 0])
+    df['skew_log_pitch'] = df['pitch_non0'].apply(lambda x: skew(np.log(x)))
+    df['range_log_pitch'] = df['pitch_non0'].apply(lambda x: np.abs((np.max(x) - np.min(x))))
     df['energy_non0'] = df['energy'].apply(lambda x: x[x != 0])
     df['range_log_energy'] = df['energy_non0'].apply(lambda x: np.abs((np.max(x) - np.min(x))))
+    df.drop(columns=['pitch_non0', 'energy_non0'], inplace=True)
 
-    # calculate statistics of cepstrum coefficients mfccs, lpccs
+    # calculate statistics of cepstrum coefficients mfccs, lpccs, lpcmfccs
     cepstrum_coeffs = ['mfccs', 'lpccs_local', 'lpcmfccs_local']
     for feature in cepstrum_coeffs:
         for index, row in df.iterrows():
             stats_list = []
             for i, coef in enumerate(row[feature]):
                 # create a list with mean, variance, maximum, and minumum of all MFCCs/LPCCs/LPCMFCCs respectively
+                # of each coefficient from 0 upwards
                 stats_list.extend([np.mean(coef), np.var(coef), np.max(coef), np.min(coef)])
             df.loc[[index], feature + '_stats'] = pd.Series([stats_list], index=df.index[[index]])
 
-
-    df.to_csv(os.path.join(result_path, 'extracted_features_modified.csv'), index=False)
+    df.to_pickle(os.path.join(result_path, result_name))
+    print('Modified file written to {}.'.format(result_name))
 
     return df
 
 
-"""
-if __name__ == "__main__":
-    #lang = getoptions()
-    lang = 'de'
-    l = lexiconGenerator(lang)
-    l.runLexiconGeneration()
-"""
-
-
-#dict1 = feature_extraction('03a01Fa.wav', data_path)
-dict2 = run_all_files(data_path, result_path)
-
-
-
-audio1_path = os.path.join(data_path, "03a01Fa.wav")
-audio1, sample_rate1 = librosa.load(audio1_path, sr=None)
-
-test = 0
+run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features.pkl')
+finalize_features(result_path=result_path, input_name='extracted_features.pkl',
+                  result_name='extracted_features_modified.pkl')
