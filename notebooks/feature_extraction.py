@@ -708,35 +708,42 @@ def finalize_features(result_path, input_name, result_name):
     print('Modify extracted features by adding statistical calculations')
     df = pd.read_pickle(os.path.join(result_path, input_name))
 
-    df['f0_max'] = df['f0'].apply(lambda x: np.max(x))
-    df['f0_std'] = df['f0'].apply(lambda x: np.std(x))
+    # general statistics needed
+    statistics_features = ['f0', 'zcr', 'rms', 'log_rms', 'amplitude', 'spectral_centroid']
+    for feature in statistics_features:
+        df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
+        df[feature + '_min'] = df[feature].apply(lambda x: np.min(x))
+        df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x))
+        df[feature + '_median'] = df[feature].apply(lambda x: np.median(x))
+        df[feature + '_var'] = df[feature].apply(lambda x: np.var(x))
 
     # calculate statistics for energy and pitch with rising/falling slopes
     statistics_features = ['energy', 'pitch']
     for feature in statistics_features:
+        # maximum, mean, variance
+        df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
+        df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x))
+        df[feature + '_var'] = df[feature].apply(lambda x: np.var(x))
         for elem in ['duration', 'value']:
-            for index, row in df.iterrows():
-                stats_list = []
-                # create a list with maximum, mean, variance
-                feature_row = row[feature].copy()
-                stats_list.extend([np.max(feature_row), np.mean(feature_row), np.var(feature_row)]) ### in paper 4: they completely ignore 0 values -> should we do it for all?
+            # clear lists from 0 values
+            df[elem + '_rising_' + feature] = df[elem + '_rising_' + feature].apply(lambda x: x[x != 0])
+            df[elem + '_falling_' + feature] = df[elem + '_falling_' + feature].apply(lambda x: x[x != 0])
 
-                # calculate maximum, mean, median, and interquartile range of rising and falling slopes of duration and
-                # value
+            # max, mean, median, and iqr for rising slopes of feature
+            df[feature + '_rising_' + elem + '_max'] = df[elem + '_rising_' + feature].apply(lambda x: np.max(x))
+            df[feature + '_rising_' + elem + '_mean'] = df[elem + '_rising_' + feature].apply(lambda x: np.mean(x))
+            df[feature + '_rising_' + elem + '_median'] = df[elem + '_rising_' + feature].apply(lambda x: np.median(x))
+            df[feature + '_rising_' + elem + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
+                *np.percentile(x, [75, 25])))
 
-                # max, mean, median, and iqr for rising slopes of feature
-                feature_row = row[elem + '_rising_' + feature].copy()
-                feature_row = feature_row[feature_row != 0] # clear lists from 0 values
-                stats_list.extend([np.max(feature_row), np.mean(feature_row), np.median(feature_row),
-                                   np.subtract(*np.percentile(feature_row, [75, 25]))])
+            # max, mean, median, and iqr for falling slopes of feature
+            df[feature + '_falling_' + elem + '_max'] = df[elem + '_falling_' + feature].apply(lambda x: np.max(x))
+            df[feature + '_falling_' + elem + '_mean'] = df[elem + '_falling_' + feature].apply(lambda x: np.mean(x))
+            df[feature + '_falling_' + elem + '_median'] = df[elem + '_falling_' + feature].apply(
+                lambda x: np.median(x))
+            df[feature + '_falling_' + elem + '_iqr'] = df[elem + '_falling_' + feature].apply(lambda x: np.subtract(
+                *np.percentile(x, [75, 25])))
 
-                # max, mean, median, and iqr for falling slopes of feature
-                feature_row = row[elem + '_falling_' + feature].copy()
-                feature_row = feature_row[feature_row != 0]  # clear lists from 0 values
-                stats_list.extend([np.max(feature_row), np.mean(feature_row), np.median(feature_row),
-                                   np.subtract(*np.percentile(feature_row, [75, 25]))])
-
-                df.loc[[index], feature + '_stats'] = pd.Series([stats_list], index=df.index[[index]])
 
     # further stats for pitch, energy
     df['pitch_non0'] = df['pitch'].apply(lambda x: x[x != 0])
@@ -750,12 +757,12 @@ def finalize_features(result_path, input_name, result_name):
     cepstrum_coeffs = ['mfccs', 'lpccs_local', 'lpcmfccs_local']
     for feature in cepstrum_coeffs:
         for index, row in df.iterrows():
-            stats_list = []
             for i, coef in enumerate(row[feature]):
-                # create a list with mean, variance, maximum, and minumum of all MFCCs/LPCCs/LPCMFCCs respectively
-                # of each coefficient from 0 upwards
-                stats_list.extend([np.mean(coef), np.var(coef), np.max(coef), np.min(coef)])
-            df.loc[[index], feature + '_stats'] = pd.Series([stats_list], index=df.index[[index]])
+                # create mean, variance, maximum, and minumum of all MFCCs/LPCCs/LPCMFCCs respectively
+                df.loc[index, feature + str(i) + '_mean'] = np.mean(coef)
+                df.loc[index, feature + str(i) + '_var'] = np.var(coef)
+                df.loc[index, feature + str(i) + '_max'] = np.max(coef)
+                df.loc[index, feature + str(i) + '_min'] = np.min(coef)
 
     df.to_pickle(os.path.join(result_path, result_name))
     print('Modified file written to {}.'.format(result_name))
