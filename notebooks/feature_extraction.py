@@ -28,13 +28,16 @@ FRAME_LENGTH = 2048
 # general functions
 def frames_gen(y, center=True, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH, pad_mode="constant"):
     """
-    generates frames like in librosa source code, additionally transposes array
-    :param y: audio signal
-    :param center:
-    :param frame_length:
-    :param hop_length:
-    :param pad_mode:
-    :return:
+    Pads the audio at the edges of the signal with given pad_mode "constant" as in other librosa features, then
+    generates frames with given frame length and hop length. Additionally, the function transposes the resulting array
+    to be able to compute other features.
+    :param y: librosa audio signal
+    :param center: bool; If ``center=True``, the padding mode to use at the edges of the signal. By default, STFT uses
+                    zero padding.
+    :param frame_length: int; length of a frame (number of signals within one frame)
+    :param hop_length: int; length of hopping window, i.e. how much we slide to the side for the next frame
+    :param pad_mode: string; which padding mode to use (i.e. 'constant', 'reflect', 'replicate' or 'circular')
+    :return: numpy.ndarray; array of size (frame_length, number of frames calculated with hop length and time of audio)
     """
     if y is not None:
         if center:
@@ -48,17 +51,18 @@ def frames_gen(y, center=True, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH,
 
 def normalize(x):
     """
-
-    :param x:
-    :return:
+    Normalizes a given feature with MinMaxScaler from sklearn.
+    :param x: list; feature given as a list
+    :return: numpy.ndarray; normalized feature as an array
     """
     return sklearn.preprocessing.MinMaxScaler().fit_transform(np.array(x).reshape(-1,1)).reshape(1,-1)[0]
 
 def average_change_rate(feature, times=None):
     """
-    calcualtes the average change rate of any feature based on the values from consecutive frames
-    :param feature: numpy array, values from a given feature
-    :return: numpy array, average change rate per consecutive frames
+    Calcualtes the average change rate of any feature based on the values from consecutive frames
+    :param feature: numpy.ndarray; values from a given feature
+    :param times: None or numpy.ndarray; if None calculate times with librosa, else use the given times
+    :return: numpy.ndarray; average change rate per consecutive frames
     """
     if times is None:
         t = librosa.frames_to_time(range(len(feature)), hop_length=HOP_LENGTH) # convert to time based on feature
@@ -72,10 +76,11 @@ def average_change_rate(feature, times=None):
 
 def rising_falling_slopes(feature, times=None):
     """
-    function that calculates duration of rising and falling slopes of a given feature, i.e. when does the sign of change
-    rate changes?
-    :param feature: numpy array, any feature calculated on the data set
-    :return: tuple, array with duration of rising slopes and array with duration of falling slopes
+    Calculates duration of rising and falling slopes of a given feature, i.e. when does the sign of change rate changes?
+    :param feature: numpy.ndarray; values from a given feature
+    :param times: None or numpy.ndarray; if None calculate times with librosa, else use the given times for average
+                    change rate calculation
+    :return: tuple; array with duration of rising slopes and array with duration of falling slopes
     """
     if times is None:
         t = librosa.frames_to_time(range(len(feature)), hop_length=HOP_LENGTH) # convert to time based on feature
@@ -121,9 +126,9 @@ def rising_falling_slopes(feature, times=None):
 
 def energy_comp(y):
     """
-
-    :param y:
-    :return:
+    Computes the energy as the sum of squared values within a frame referring to the overall magnitude of the signal.
+    :param y: librosa audio signal
+    :return: numpy.ndarray; normalized array of energy across the frames
     """
     frames = frames_gen(y) # generate frames
     ener = [np.sum(np.square(frame)) for frame in frames]
@@ -131,62 +136,66 @@ def energy_comp(y):
 
 def RMS_energy(y, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
     """
-
-    :param y:
-    :param hop_length:
-    :param frame_length:
-    :return:
+    Computes the root mean squared (RMS) values for each frame.
+    :param y: librosa audio signal
+    :param hop_length: int; length of hopping window, i.e. how much we slide to the side for the next frame
+    :param frame_length: int; length of a frame (number of signals within one frame)
+    :return: numpy.ndarray; RMS values across the frames
     """
     return librosa.feature.rms(y=y, hop_length=hop_length, frame_length=frame_length)[0]
 
 def RMS_log_entropy(y):
     """
-
-    :param y:
-    :return:
+    Calculates the root mean squared (RMS) values of the phase of the signal for each frame.
+    :param y: librosa audio signal
+    :return: numpy.ndarray; RMS values of phase across the frames
     """
     S, phase = librosa.magphase(librosa.stft(y)) # separate spectrogram in magnitude and phase
     return librosa.feature.rms(S=S)[0]
 
 def amplitude_envelope(y, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
     """
-
-    :param y:
-    :param frame_length:
-    :param hop_length:
-    :return:
+    Calculates the envelope of the amplitude of the signal, i.e. the maximal value (amplitude) for each frame.
+    :param y: librosa audio signal
+    :param frame_length: int; length of a frame (number of signals within one frame)
+    :param hop_length: int; length of hopping window, i.e. how much we slide to the side for the next frame
+    :return: numpy.ndarray; amplitude values of the signal across the frames
     """
     return np.array([max(y[i:i+frame_length]) for i in range(0, y.size, hop_length)])
 
 def ZCR(y, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
     """
-
-    :param y:
-    :param frame_length:
-    :param hop_length:
-    :return:
+    Calculates the zero crossing rate per frame, i.e. how often the signal crosses zero.
+    :param y: librosa audio signal
+    :param frame_length: int; length of a frame (number of signals within one frame)
+    :param hop_length: int; length of hopping window, i.e. how much we slide to the side for the next frame
+    :return: numpy.ndarray; zero crossing rates across the frames
     """
     return librosa.feature.zero_crossing_rate(y=y, frame_length=frame_length, hop_length=hop_length)[0]
 
-def lpc_est(y, order=4):
+def lowlevel_lpc_comp(y, order=4):
     """
-
-    :param y:
-    :param order:
-    :return:
+    Computes Linear Prediction Coefficients (LPCs) of the given order via Burg’s method on a low level, i.e. for each
+    frame.
+    :param y: librosa audio signal
+    :param order: order of LPC
+    :return: numpy.ndarray; of shape (order of LPCs, number of frames)
     """
-    return librosa.lpc(y, order=order)
+    frames = frames_gen(y)  # generate frames
+    ll_lpcs = [librosa.lpc(frame, order=order) for frame in frames]
+    return np.array(ll_lpcs).transpose()
 
 # entropy definitions
 def spectral_entropy(y, sr, center=True):
     """
-    Spectral Entropy is defined to be the Shannon entropy of the power spectral density (PSD) of the data:
+    Computes the spectral entropy of the signal. Spectral Entropy is defined as the Shannon entropy of the power
+    spectral density (PSD) of the data:
     math:: H(x, sf) =  -\\sum_{f=0}^{f_s/2} P(f) \\log_2[P(f)]
     Where :math:`P` is the normalised PSD, and :math:`f_s` is the sampling frequency.
-    :param y:
-    :param sf:
-    :param center:
-    :return:
+    :param y: librosa audio signal
+    :param sr: int; ampling rate
+    :param center: bool; if true, zero padding is applied for frames generation.
+    :return: numpy.ndarray; spectral entropy across frames
     """
     frames = frames_gen(y, center=center)
     with np.errstate(divide='ignore', invalid='ignore'): # ignore division warinings here, will anyways return 0
@@ -195,10 +204,11 @@ def spectral_entropy(y, sr, center=True):
 
 def shannon_entropy(y, base=None):
     """
-
-    :param y:
-    :param base:
-    :return:
+    Computes the shannon entropy of the signal per frame. Histogram can compute the probability of the occurance of a
+    signal value. Entropy computes the Shannon entropy of these probabilities.
+    :param y: librosa audio signal
+    :param base: the logarithmic base to use, defaults to e
+    :return: numpy.ndarray; normalized shannon entropy across frames
     """
     frames = frames_gen(y)
     entropy_contour = [entropy(np.histogram(frame, bins=len(frame), density=True)[0], base=base) for frame in frames]
@@ -206,9 +216,10 @@ def shannon_entropy(y, base=None):
 
 def threshold_entropy(y):
     """
-
-    :param y:
-    :return:
+    Computes the threshold entropy of the signal per frame where threshold is the mean of the absolute signal.
+    Based on https://www.sciencedirect.com/science/article/pii/S0031320396000659.
+    :param y: librosa audio signal
+    :return: numpy.ndarray; threshold entropy across frames
     """
     thrd = np.mean(np.abs(y)) # threshold is the mean of the absolute signal
 
@@ -219,9 +230,9 @@ def threshold_entropy(y):
 
 def log_energy_entropy(y):
     """
-
-    :param y:
-    :return:
+    Computes the logarithmic energy entropy per frame which equals the sum of the logarithm of the square in a frame.
+    :param y: librosa audio signal
+    :return: numpy.ndarray; normalized logarithmic energy entropy across frames
     """
     frames = frames_gen(y)
 
@@ -232,10 +243,11 @@ def log_energy_entropy(y):
 
 def sure_entropy(y, threshold=0.05):
     """
-
-    :param y:
-    :param threshold:
-    :return:
+    Computes the sure entropy of the signal per frame.
+    Based on https://www.sciencedirect.com/science/article/pii/S0925231216306403.
+    :param y: librosa audio signal
+    :param threshold: float; threshold with which we need to compare. Chosen heuristically.
+    :return: numpy.ndarray; normalized sure entropy across frames
     """
     frames = frames_gen(y)
     sure_ent = []
@@ -249,12 +261,13 @@ def sure_entropy(y, threshold=0.05):
 # fundamental frequency and formants
 def f0_comp(y, sr):
     """
-     Fundamental frequency is closely related to pitch, which is defined as our perception of fundamental frequency.
-     F0 describes the actual physical phenomenon; pitch describes how our ears and brains interpret the signal, in terms
-     of periodicity.
-    :param y:
-    :param sr:
-    :return:
+    Computes the fundamental frequency of the signal per frame. Fundamental frequency is closely related to pitch,
+    which is defined as our perception of fundamental frequency. F0 describes the actual physical phenomenon; pitch
+    describes how our ears and brains interpret the signal, in terms of periodicity.
+    :param y: librosa audio signal
+    :param sr: int; sampling rate
+    :return: tuple; array for f0 values across frames, array of boolean indication of voiced parts, array of
+    probabilities for indication of voiced parts
     """
     f0, voiced_flag, voiced_prob = librosa.pyin(y=y, sr=sr, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7')
                                                 , hop_length=HOP_LENGTH)
@@ -263,11 +276,10 @@ def f0_comp(y, sr):
 
 def pitch_comp(y):
     """
-    Fundamental frequency is closely related to pitch, which is defined as our perception of fundamental frequency.
-    F0 describes the actual physical phenomenon; pitch describes how our ears and brains interpret the signal, in terms
+    Computes the pitch of the signal using praat. Pitch describes how our ears and brains interpret the signal in terms
     of periodicity.
-    :param y:
-    :return:
+    :param y: praat audio signal
+    :return: tuple; array of pitch values, array of pitch times according to praat
     """
     pitch = y.to_pitch()
     pitch_values = pitch.selected_array['frequency']
@@ -276,17 +288,15 @@ def pitch_comp(y):
 
 def formant_analysis(y, gender, formant_order=4, f0min = 75, f0max = 600):
     """
-    f0_max: in the example it was 300; but here we see standard is 600
-    (https://www.fon.hum.uva.nl/praat/manual/Sound__To_Pitch__ac____.html)
-    :param filename:
-    :param path:
-    :param gender:
-    :param formant_order:
-    :param f0min:
-    :param f0max:
-    :return:
+    Computes the formants of the signal up to the given order with praat.
+    :param y: praat audio signal
+    :param gender: string; either male or female, determines the maximal frequency according to the speaker's gender
+    :param formant_order: int; order up to which we want to calculate the formants
+    :param f0min: int; the standard is 75
+    :param f0max: int; the standard is 600 (https://www.fon.hum.uva.nl/praat/manual/Sound__To_Pitch__ac____.html).
+    :return: dictionary; key and values for the different formants and their statistics (median, maximum, mean, standard
+    deviation, variance, average change rate)
     """
-
     # compute the occurrences of periodic instances in the signal
     pointProcess = call(y, "To PointProcess (periodic, cc)", f0min, f0max)
 
@@ -327,17 +337,16 @@ def formant_analysis(y, gender, formant_order=4, f0min = 75, f0max = 600):
 # speed of speech
 def speech_rate(sound):
     """
-    Function that estimates speaking rate and articulation rate and ASD without text conversion.
+    Estimates the speaking rate, articulation rate and ASD without text conversion.
     Based on "Praat Script Syllable Nuclei" from De Jong, N.H. & Wempe, T. (2009). Praat script to detect syllable
     nuclei and measure speech rate automatically. Behavior research methods, 41 (2), 385 - 390.
     Updated by Hugo Quené, Ingrid Persoon, & Nivja de Jong in 2017 and translated to Python with Parselmouth by David
     Feinberg in 2019.
     Only slight changes made. It seems sufficient to calculate the overall rates for emotion detection and not per frame.
-    :param sound: sound loaded with praat
-    :return: dictionary containing number of voiced syllables, number of pauses, original duration, intensity duration,
+    :param sound: praat audio signal
+    :return: dictionary; contains number of voiced syllables, number of pauses, original duration, intensity duration,
     speaking rate, articulation rate, and average syllable duration (asd)
     """
-
     silencedb = -25
     mindip = 2
     minpause = 0.3
@@ -455,13 +464,14 @@ def speech_rate(sound):
 # brightness
 def spectral_centroid(y, sr, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
     """
+    Computes the spectral centroid as the brightness of the signal per frame.
     Spectral centroid is the centre of gravity of the magnitude spectrum; frequency band where most of the energy is
     concentrated. It measures the brightness of the sound (see https://github.com/kimlindner/AudioSignalProcessingForML/)
-    :param y: audio file loaded with librosa
-    :param sr: int, sample rate
-    :param frame_length: int, length of a frame
-    :param hop_length: int, length of the hopping window
-    :return: array, normalized spectral centroid
+    :param y: librosa audio signal
+    :param sr: int; sample rate
+    :param frame_length: int; length of a frame (number of signals within one frame)
+    :param hop_length: int; length of hopping window, i.e. how much we slide to the side for the next frame
+    :return: numpy.ndarray, normalized spectral centroid / brightness per frame
     """
     spectral_cent = librosa.feature.spectral_centroid(y=y, sr=sr, n_fft=frame_length, hop_length=hop_length)[0]
     return normalize(spectral_cent)
@@ -469,11 +479,11 @@ def spectral_centroid(y, sr, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
 # mfccs
 def mfcc_comp(y, sr, n):
     """
-    function that computes n MFCCs, its first, and second derivative with librosa
-    :param y: audio file loaded with librosa
-    :param sr: int, sample rate
-    :param n: int, number of MFCCs to calculate
-    :return: tuple with standard, first, and second order derivative mfccs, each contains a (n,feature length))-
+    Computes n Mel Frequency Cepstrum Coefficients (MFCCs), its first, and second derivative with librosa.
+    :param y: librosa audio signal
+    :param sr: int; sample rate
+    :param n: int; number of MFCCs to calculate
+    :return: tuple; with standard, first, and second order derivative mfccs, each contains a (n,feature length))-
     dimensional array with n entries per short-frame
     """
     mfccs = librosa.feature.mfcc(y=y, n_mfcc=n, sr=sr, n_fft=FRAME_LENGTH, hop_length=HOP_LENGTH)
@@ -485,19 +495,20 @@ def mfcc_comp(y, sr, n):
 # lpccs
 def lpcc(y, lpc_order, cepsorder=None):
     """
+    Computes Linear Prediction Cepstrum Coefficients (LPCCs) of the given signal.
     Code partly from https://www.kaggle.com/code/sourabhy/working-with-speech.
     Code based on algorithm from Rao et al. (2015).Language Identification Using Spectral and Prosodic Features.
     (https://link.springer.com/content/pdf/bbm:978-3-319-17163-0/1.pdf) &
     Al-Alaoui et al. (2008). Speech Recognition using Artificial Neural Networks and Hidden Markov Models.
     (https://feaweb.aub.edu.lb/research/dsaf/Publications/IMCL114.pdf) &
     Matlab ressouce https://de.mathworks.com/help/dsp/ref/lpctofromcepstralcoefficients.html.
-    :param y: librosa audio
+    :param y: librosa audio signal
     :param lpc_order: int; LPC coefficients order
     :param cepsorder: int; LPCC coefficients order
     :return: list; LPCC coefficients for the given sequence y
     """
     # compute LPC coefficients
-    coefs = lpc_est(y, lpc_order)
+    coefs = librosa.lpc(y, order=lpc_order)
 
     # compute error term with librosa source code
     b = np.hstack([[0], -1 * coefs[1:]])
@@ -521,10 +532,10 @@ def lpcc(y, lpc_order, cepsorder=None):
 
 def lowlevel_lpcc_comp(y, lpc_order, cepsorder=None):
     """
-    computes LPCCs on a low level, i.e. LPCCs of order cepsorder for each frame
-    :param y: audio sequence
-    :param cepsorder: order of cepstrum
-    :return:
+    Computes LPCCs on a low level, i.e. LPCCs of order cepsorder for each frame.
+    :param y: librosa audio signal
+    :param cepsorder: int; order of cepstrum
+    :return: numpy.ndarray; LPCCs of order cepsorder per frame, has shape (cepsorder, number of frames)
     """
     frames = frames_gen(y)  # generate frames
     ll_lpccs = [lpcc(frame, lpc_order, cepsorder=cepsorder) for frame in frames]
@@ -533,7 +544,9 @@ def lowlevel_lpcc_comp(y, lpc_order, cepsorder=None):
 # lpcmfcc
 def lpcmfcc_comp(lpccs, alpha=0.35, order_n=None):
     """
-    computes LPCMFCCs based on the given LPCC coefficients recursively with order_n iterations going down
+    Computes Linear Prediction Coefficients and Mel Frequency Cepstrum Coefficients (LPCMFCCs) based on the given LPCC
+    coefficients recursively with order_n iterations going down. Computation mainly based on
+    http://www.ecice06.com/EN/abstract/abstract9872.shtml.
     :param lpccs: list of size cepsorder; computed LPCC coefficients
     :param alpha: float; usually between 0.31 and 0.35 to be close to Mel scale
     :param order_n: int; number of iterations, generally equal to order of LPCCs
@@ -558,12 +571,12 @@ def lpcmfcc_comp(lpccs, alpha=0.35, order_n=None):
 
 def lowlevel_lpcmfcc_comp(lpccs_local, alpha=0.35, order_n=None):
     """
-    computes LPCMFCCs on a low level, i.e. taking the computed LPCCs from each frame and computing LPCMFCCs for that
+    Computes LPCMFCCs on a low level, i.e. taking the computed LPCCs from each frame and computing LPCMFCCs for that
     frame
     :param lpccs_local: numpy array of shape (cepsorder, number of frames); all LPCCs per frame
     :param alpha: float; usually between 0.31 and 0.35 to be close to Mel scale
     :param order_n: int; number of iterations, generally equal to order of LPCCs
-    :return: numpy array of shape (cepsorder, number of frames); all LPCMFCCs per frame
+    :return: numpy.ndarray; of shape (cepsorder, number of frames); all LPCMFCCs per frame
     """
     ll_lpcmfccs = [lpcmfcc_comp(lpccs_frame, alpha=alpha, order_n=order_n) for lpccs_frame in lpccs_local.transpose()]
     return np.array(ll_lpcmfccs).transpose()
@@ -573,13 +586,13 @@ def lfcc_comp(y, sr, n_lfcc, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
     """
     Computes LFCCs (Linear Frequency Cepstral Coefficients) with torchaudio, i.e. spectral energy dynamic coefficients
     of equally spaced frequency bands. MFCCs are calculated on the Mel scale using Melspectrogram but LFCCs are based on
-    Spectrogram
-    :param y: torchaudio sound
+    Spectrogram.
+    :param y: torchaudio audio signal
     :param sr: int; sampling rate
     :param n_lfcc: int; order of LFCCs, i.e. number of coefficients to compute
-    :param frame_length: int
-    :param hop_length: int
-    :return: numpy array of size (n_lfcc, number of frames); LFCC coefficients per frame
+    :param frame_length: int; length of a frame (number of signals within one frame)
+    :param hop_length: int; length of hopping window, i.e. how much we slide to the side for the next frame
+    :return: numpy.ndarray of size (n_lfcc, number of frames); LFCC coefficients per frame
     """
     lfccs = LFCC(sample_rate=sr, n_lfcc=n_lfcc, speckwargs={"n_fft": frame_length, "hop_length": hop_length,
                                                                  'pad_mode': 'constant'})(y)
@@ -587,10 +600,10 @@ def lfcc_comp(y, sr, n_lfcc, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
 
 def feature_extraction(filename, path):
     """
-
-    :param filename:
-    :param path:
-    :return:
+    Extracts all necessary features per audio file.
+    :param filename: name of the file
+    :param path: path in which the file lies
+    :return: dictionary; with file name, label, and all computed features.
     """
     audio_path = os.path.join(path, filename)
     y, sr = librosa.load(audio_path, sr=None) # load librosa audio
@@ -620,7 +633,9 @@ def feature_extraction(filename, path):
     log_rms = RMS_log_entropy(y)
     amplitude = amplitude_envelope(y)
     amplitude_avg_change_rate = average_change_rate(amplitude)
-    lpc = lpc_est(y)
+    lpc_global = librosa.lpc(y, order=4)
+    lpc_local = lowlevel_lpc_comp(y)
+
 
     # entropy computations
     spectral_ent = spectral_entropy(y, sr)
@@ -662,7 +677,8 @@ def feature_extraction(filename, path):
                      'energy':energy, 'energy_avg_change_rate':energy_avg_change_rate, 'duration_rising_energy':duration_rising_energy,
                      'duration_falling_energy':duration_falling_energy, 'value_rising_energy':value_rising_energy,
                      'value_falling_energy':value_falling_energy, 'rms':rms_energy, 'log_rms':log_rms,
-                     'amplitude':amplitude, 'amplitude_avg_change_rate':amplitude_avg_change_rate, 'lpc':lpc,
+                     'amplitude':amplitude, 'amplitude_avg_change_rate':amplitude_avg_change_rate, 'lpc_global':lpc_global,
+                     'lpc_local':lpc_local,
                      'spectral_entropy':spectral_ent, 'shannon_entropy':shannon_ent, 'threshold_entropy':threshold_ent,
                      'log_energy_entropy':log_energy_ent, 'sure_entropy':sure_ent, 'f0':f0, 'voiced':voiced_flag,
                      'f0_avg_change_rate':f0_avg_change_rate, 'pitch':pitch_values, 'pitch_time':pitch_time,
@@ -676,6 +692,13 @@ def feature_extraction(filename, path):
     return features_dict
 
 def run_all_files(data_path, result_path, result_name):
+    """
+    Runs all files for feature extraction within the given path and saves a dataframe to the result path.
+    :param data_path: path where the audio files are
+    :param result_path: path where the dataframe should be saved in a pickle file
+    :param result_name: name of the resulting dataframe
+    :return: dataframe with all files and features extracted
+    """
     audio_files = os.listdir(data_path)
 
     # create an final list to store all results and convert to dataframe
@@ -699,7 +722,8 @@ def run_all_files(data_path, result_path, result_name):
 
 def finalize_features(result_path, input_name, result_name):
     """
-    finalizes the feature extraction part with some statistical calculations
+    Finalizes the feature extraction part with some statistical calculations for the different features and writes the
+    newly updated dataframe in a new pickle file.
     :param result_path: path where results are stored
     :param input_name: name of the created feature extraction file
     :param result_name: name of the modified feature extraction file
@@ -754,7 +778,7 @@ def finalize_features(result_path, input_name, result_name):
     df.drop(columns=['pitch_non0', 'energy_non0'], inplace=True)
 
     # calculate statistics of cepstrum coefficients mfccs, lpccs, lpcmfccs
-    cepstrum_coeffs = ['mfccs', 'lpccs_local', 'lpcmfccs_local']
+    cepstrum_coeffs = ['mfccs', 'lpccs_local', 'lpcmfccs_local', 'lpc_local']
     for feature in cepstrum_coeffs:
         for index, row in df.iterrows():
             for i, coef in enumerate(row[feature]):
