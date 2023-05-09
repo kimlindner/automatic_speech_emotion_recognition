@@ -671,23 +671,25 @@ def feature_extraction(filename, path):
     lpcmfccs_local = lowlevel_lpcmfcc_comp(lpccs_local)
     lfccs = lfcc_comp(y_torch, sr_torch, n_lfcc=12)
 
-
-    features_dict = {'file':filename, 'label':label, 'speaker':speaker_num, 'gender':gender, 'duration':duration,
-                     'mean':mean, 'median':median, 'max':max, 'min':min, 'var':var, 'std':std, 'zcr':zcr,
-                     'energy':energy, 'energy_avg_change_rate':energy_avg_change_rate, 'duration_rising_energy':duration_rising_energy,
-                     'duration_falling_energy':duration_falling_energy, 'value_rising_energy':value_rising_energy,
-                     'value_falling_energy':value_falling_energy, 'rms':rms_energy, 'log_rms':log_rms,
-                     'amplitude':amplitude, 'amplitude_avg_change_rate':amplitude_avg_change_rate, 'lpc_global':lpc_global,
-                     'lpc_local':lpc_local,
-                     'spectral_entropy':spectral_ent, 'shannon_entropy':shannon_ent, 'threshold_entropy':threshold_ent,
-                     'log_energy_entropy':log_energy_ent, 'sure_entropy':sure_ent, 'f0':f0, 'voiced':voiced_flag,
-                     'f0_avg_change_rate':f0_avg_change_rate, 'pitch':pitch_values, 'pitch_time':pitch_time,
-                     'duration_rising_pitch':duration_rising_pitch, 'duration_falling_pitch':duration_falling_pitch,
-                     'value_rising_pitch':value_rising_pitch, 'value_falling_pitch':value_falling_pitch,
-                     'speaking_rate':speaking_rate, 'articulation_rate':articulation_rate, 'asd':asd,
-                     'spectral_centroid':spectral_cent, 'mfccs':mfccs, 'delta_mfccs':delta_mfccs,
-                     'delta2_mfccs':delta2_mfccs, 'lpccs_local':lpccs_local, 'lpccs_global':lpccs_global,
-                     'lpcmfccs_global':lpcmfccs_global, 'lpcmfccs_local':lpcmfccs_local, 'lfccs':lfccs} | formants
+    features_dict = {'file': filename, 'label': label, 'speaker': speaker_num, 'gender': gender, 'duration': duration,
+                     'mean': mean, 'median': median, 'max': max, 'min': min, 'var': var, 'std': std, 'zcr': zcr,
+                     'energy': energy, 'energy_avg_change_rate': energy_avg_change_rate,
+                     'duration_rising_energy': duration_rising_energy,
+                     'duration_falling_energy': duration_falling_energy, 'value_rising_energy': value_rising_energy,
+                     'value_falling_energy': value_falling_energy, 'rms': rms_energy, 'log_rms': log_rms,
+                     'amplitude': amplitude, 'amplitude_avg_change_rate': amplitude_avg_change_rate,
+                     'lpc_global': lpc_global,
+                     'lpc_local': lpc_local,
+                     'spectral_entropy': spectral_ent, 'shannon_entropy': shannon_ent,
+                     'threshold_entropy': threshold_ent,
+                     'log_energy_entropy': log_energy_ent, 'sure_entropy': sure_ent, 'f0': f0, 'voiced': voiced_flag,
+                     'f0_avg_change_rate': f0_avg_change_rate, 'pitch': pitch_values, 'pitch_time': pitch_time,
+                     'duration_rising_pitch': duration_rising_pitch, 'duration_falling_pitch': duration_falling_pitch,
+                     'value_rising_pitch': value_rising_pitch, 'value_falling_pitch': value_falling_pitch,
+                     'speaking_rate': speaking_rate, 'articulation_rate': articulation_rate, 'asd': asd,
+                     'spectral_centroid': spectral_cent, 'mfccs': mfccs, 'delta_mfccs': delta_mfccs,
+                     'delta2_mfccs': delta2_mfccs, 'lpccs_local': lpccs_local, 'lpccs_global': lpccs_global,
+                     'lpcmfccs_global': lpcmfccs_global, 'lpcmfccs_local': lpcmfccs_local, 'lfccs': lfccs} | formants
 
     return features_dict
 
@@ -729,45 +731,53 @@ def finalize_features(result_path, input_name, result_name):
     :param result_name: name of the modified feature extraction file
     :return: finalized dataframe
     """
-    print('Modify extracted features by adding statistical calculations')
+    from warnings import simplefilter
+    simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
+
+    print('Modify extracted features by adding statistical calculations.')
     df = pd.read_pickle(os.path.join(result_path, input_name))
 
-    # general statistics needed
-    statistics_features = ['f0', 'zcr', 'rms', 'log_rms', 'amplitude', 'spectral_centroid']
-    for feature in statistics_features:
-        df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
-        df[feature + '_min'] = df[feature].apply(lambda x: np.min(x))
-        df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x))
-        df[feature + '_median'] = df[feature].apply(lambda x: np.median(x))
-        df[feature + '_var'] = df[feature].apply(lambda x: np.var(x))
+    # general statistics for all list or array type features
+    print('Calculate general statistics.')
 
-    # calculate statistics for energy and pitch with rising/falling slopes
-    statistics_features = ['energy', 'pitch']
-    for feature in statistics_features:
-        # maximum, mean, variance
-        df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
-        df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x))
-        df[feature + '_var'] = df[feature].apply(lambda x: np.var(x))
+    # first clear rising and falling slopes from 0 values
+    for feature in ['energy', 'pitch']:
         for elem in ['duration', 'value']:
             # clear lists from 0 values
             df[elem + '_rising_' + feature] = df[elem + '_rising_' + feature].apply(lambda x: x[x != 0])
             df[elem + '_falling_' + feature] = df[elem + '_falling_' + feature].apply(lambda x: x[x != 0])
 
-            # max, mean, median, and iqr for rising slopes of feature
-            df[feature + '_rising_' + elem + '_max'] = df[elem + '_rising_' + feature].apply(lambda x: np.max(x))
-            df[feature + '_rising_' + elem + '_mean'] = df[elem + '_rising_' + feature].apply(lambda x: np.mean(x))
-            df[feature + '_rising_' + elem + '_median'] = df[elem + '_rising_' + feature].apply(lambda x: np.median(x))
-            df[feature + '_rising_' + elem + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
+    # calculate statistics for all
+    for feature in list(df.columns):
+        if (type(df[feature][0]) == list) or (type(df[feature][0]) == np.ndarray and df[feature][0].ndim == 1):
+            df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
+            df[feature + '_min'] = df[feature].apply(lambda x: np.min(x))
+            df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x))
+            df[feature + '_median'] = df[feature].apply(lambda x: np.median(x))
+            df[feature + '_var'] = df[feature].apply(lambda x: np.var(x))
+        elif (type(df[feature][0]) == np.ndarray and df[feature][0].ndim == 2):
+            # calculate statistics of cepstrum coefficients mfccs, lpccs, lpcmfccs, lpcs,..., i.e. multidimensional arrays
+            for index, row in df.iterrows():
+                for i, coef in enumerate(row[feature]):
+                    # create mean, variance, maximum, and minumum of all MFCCs/LPCCs/LPCMFCCs respectively
+                    df.loc[index, feature + str(i) + '_max'] = np.max(coef)
+                    df.loc[index, feature + str(i) + '_min'] = np.min(coef)
+                    df.loc[index, feature + str(i) + '_mean'] = np.mean(coef)
+                    df.loc[index, feature + str(i) + '_median'] = np.median(coef)
+                    df.loc[index, feature + str(i) + '_var'] = np.var(coef)
+
+    # calculate statistics for energy and pitch with rising/falling slopes
+    print('Calculate energy and pitch statistics.')
+    statistics_features = ['energy', 'pitch']
+    for feature in statistics_features:
+        for elem in ['duration', 'value']:
+            # iqr for rising slopes of feature
+            df[elem + '_rising_' + feature + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
                 *np.percentile(x, [75, 25])))
 
-            # max, mean, median, and iqr for falling slopes of feature
-            df[feature + '_falling_' + elem + '_max'] = df[elem + '_falling_' + feature].apply(lambda x: np.max(x))
-            df[feature + '_falling_' + elem + '_mean'] = df[elem + '_falling_' + feature].apply(lambda x: np.mean(x))
-            df[feature + '_falling_' + elem + '_median'] = df[elem + '_falling_' + feature].apply(
-                lambda x: np.median(x))
-            df[feature + '_falling_' + elem + '_iqr'] = df[elem + '_falling_' + feature].apply(lambda x: np.subtract(
+            # iqr for falling slopes of feature
+            df[elem + '_falling_' + feature + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
                 *np.percentile(x, [75, 25])))
-
 
     # further stats for pitch, energy
     df['pitch_non0'] = df['pitch'].apply(lambda x: x[x != 0])
@@ -777,16 +787,12 @@ def finalize_features(result_path, input_name, result_name):
     df['range_log_energy'] = df['energy_non0'].apply(lambda x: np.abs((np.max(x) - np.min(x))))
     df.drop(columns=['pitch_non0', 'energy_non0'], inplace=True)
 
-    # calculate statistics of cepstrum coefficients mfccs, lpccs, lpcmfccs
-    cepstrum_coeffs = ['mfccs', 'lpccs_local', 'lpcmfccs_local', 'lpc_local']
-    for feature in cepstrum_coeffs:
-        for index, row in df.iterrows():
-            for i, coef in enumerate(row[feature]):
-                # create mean, variance, maximum, and minumum of all MFCCs/LPCCs/LPCMFCCs respectively
-                df.loc[index, feature + str(i) + '_mean'] = np.mean(coef)
-                df.loc[index, feature + str(i) + '_var'] = np.var(coef)
-                df.loc[index, feature + str(i) + '_max'] = np.max(coef)
-                df.loc[index, feature + str(i) + '_min'] = np.min(coef)
+    # remove columns that only have the same values (e.g. happens for energy_max for example)
+    print('Remove columns that only have the same values.')
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    mask = (df[num_cols].nunique() == 1) # get a boolean mask of columns with only one unique value
+    cols_to_drop = mask[mask].index # get the column names to drop
+    df.drop(cols_to_drop, axis=1, inplace=True) # drop the columns
 
     df.to_pickle(os.path.join(result_path, result_name))
     print('Modified file written to {}.'.format(result_name))
@@ -794,6 +800,6 @@ def finalize_features(result_path, input_name, result_name):
     return df
 
 
-run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features.pkl')
+#run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features.pkl')
 finalize_features(result_path=result_path, input_name='extracted_features.pkl',
-                  result_name='extracted_features_modified.pkl')
+                  result_name='extracted_features_modified_all_stats.pkl')
