@@ -12,18 +12,16 @@ import scipy
 from scipy.stats import entropy
 from scipy.stats import skew
 import parselmouth
-from parselmouth import praat
 from parselmouth.praat import call
 import torchaudio
 from torchaudio.transforms import LFCC
 
-
-data_path = os.path.join(str(Path(__file__).parents[1]), 'data/wav')
+data_path = os.path.join(str(Path(__file__).parents[1]), 'data/ravdess')
+#data_path = os.path.join(str(Path(__file__).parents[1]), 'data/emodb/wav')
 result_path = os.path.join(str(Path(__file__).parents[1]), 'results')
 
 HOP_LENGTH = 512
 FRAME_LENGTH = 2048
-### checken, ob globale Variablen überall drin!
 
 # general functions
 def frames_gen(y, center=True, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH, pad_mode="constant"):
@@ -300,11 +298,15 @@ def formant_analysis(y, gender, formant_order=4, f0min = 75, f0max = 600):
     # compute the occurrences of periodic instances in the signal
     pointProcess = call(y, "To PointProcess (periodic, cc)", f0min, f0max)
 
+    """
+    ### added in second round of feature generation for female / male differentiation
     # define maximal frequency depending on gender
-    if gender == 'female':
+    if gender == 'f':
         formant_ceiling = 5500
     else:
         formant_ceiling = 5000
+    """
+    formant_ceiling = 5000 # decided for no differentiation female/male because we achieved better results
 
     formants = call(y, "To Formant (burg)", 0.0025, 5, formant_ceiling, 0.025, 50)  # formants definition
 
@@ -598,102 +600,125 @@ def lfcc_comp(y, sr, n_lfcc, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
                                                                  'pad_mode': 'constant'})(y)
     return lfccs.numpy()[0] # convert tensor to numpy array
 
-def feature_extraction(filename, path):
+def feature_extraction(filename, path, database):
     """
     Extracts all necessary features per audio file.
     :param filename: name of the file
     :param path: path in which the file lies
     :return: dictionary; with file name, label, and all computed features.
     """
-    audio_path = os.path.join(path, filename)
+    if database == 'emodb':
+        audio_path = os.path.join(path, filename)
+    elif database == 'ravdess':
+        audio_path = filename
+        filename = filename.split('\\')[-1]
     y, sr = librosa.load(audio_path, sr=None) # load librosa audio
     y_praat = parselmouth.Sound(audio_path)  # load praat audio
     y_torch, sr_torch = torchaudio.load(audio_path) # load torch audio
 
-    label_dict = {'W':'anger', 'L':'boredom', 'E':'disgust', 'A':'fear', 'F':'happiness', 'T':'sadness', 'N':'neutral'}
-    label = label_dict[filename[5]]
-    speaker_num = filename[:2]
-    gender_dict = {'03':'m', '08':'f', '09':'f', '10':'m', '11':'m', '12':'m', '13':'f', '14':'f', '15':'m', '16':'f'}
-    gender = gender_dict[speaker_num]
-    duration = librosa.get_duration(y=y, sr=sr)
+    if database == 'emodb':
+        # label and speaker information for emo db
+        label_dict = {'W': 'anger', 'L': 'boredom', 'E': 'disgust', 'A': 'fear', 'F': 'happiness', 'T': 'sadness',
+                      'N': 'neutral'}
+        label = label_dict[filename[5]]
+        speaker_num = filename[:2]
+        gender_dict = {'03': 'm', '08': 'f', '09': 'f', '10': 'm', '11': 'm', '12': 'm', '13': 'f', '14': 'f', '15': 'm',
+                       '16': 'f'}
+        gender = gender_dict[speaker_num]
 
-    # basic statistics of signal
-    mean = np.mean(np.abs(y))
-    median = np.median(np.abs(y))
-    max = np.max(y)
-    min = np.min(y)
-    var = np.var(y)
-    std = np.std(y)
+    elif database == 'ravdess':
+        # label and speaker information for ravdess
+        filename_list = filename.split('-')
+        label_dict = {'01': 'neutral', '02': 'calmness', '03': 'happiness', '04': 'sadness', '05': 'anger', '06': 'fear',
+                      '07': 'disgust', '08': 'surprise'}
+        label = label_dict[filename_list[2]]
+        speaker_num = filename_list[-1].split('.')[0]
+        gender = 'm' if int(speaker_num) % 2 != 0 else 'f'
 
-    zcr = ZCR(y)
-    energy = energy_comp(y)
-    energy_avg_change_rate = average_change_rate(energy)
-    duration_rising_energy, duration_falling_energy, value_rising_energy, value_falling_energy = rising_falling_slopes(energy)
-    rms_energy = RMS_energy(y)
-    log_rms = RMS_log_entropy(y)
-    amplitude = amplitude_envelope(y)
-    amplitude_avg_change_rate = average_change_rate(amplitude)
-    lpc_global = librosa.lpc(y, order=4)
-    lpc_local = lowlevel_lpc_comp(y)
+    # only extract data for the chosen 7 emotions
+    if label in ['anger', 'boredom', 'disgust', 'fear', 'happiness', 'neutral', 'sadness']:
+
+        duration = librosa.get_duration(y=y, sr=sr)
+
+        # basic statistics of signal
+        mean = np.mean(np.abs(y))
+        median = np.median(np.abs(y))
+        max = np.max(y)
+        min = np.min(y)
+        var = np.var(y)
+        std = np.std(y)
+
+        zcr = ZCR(y)
+        energy = energy_comp(y)
+        energy_avg_change_rate = average_change_rate(energy)
+        duration_rising_energy, duration_falling_energy, value_rising_energy, value_falling_energy = rising_falling_slopes(energy)
+        rms_energy = RMS_energy(y)
+        log_rms = RMS_log_entropy(y)
+        amplitude = amplitude_envelope(y)
+        amplitude_avg_change_rate = average_change_rate(amplitude)
+        lpc_global = librosa.lpc(y, order=4)
+        lpc_local = lowlevel_lpc_comp(y)
 
 
-    # entropy computations
-    spectral_ent = spectral_entropy(y, sr)
-    log_energy_ent = log_energy_entropy(y)
-    shannon_ent = shannon_entropy(y)
-    threshold_ent = threshold_entropy(y)
-    sure_ent = sure_entropy(y)
+        # entropy computations
+        spectral_ent = spectral_entropy(y, sr)
+        log_energy_ent = log_energy_entropy(y)
+        shannon_ent = shannon_entropy(y)
+        threshold_ent = threshold_entropy(y)
+        sure_ent = sure_entropy(y)
 
-    # f0, formants
-    f0, voiced_flag, voiced_prob = f0_comp(y, sr)
-    f0_avg_change_rate = average_change_rate(f0)
-    formants = formant_analysis(y_praat, gender)
+        # f0, formants
+        f0, voiced_flag, voiced_prob = f0_comp(y, sr)
+        f0_avg_change_rate = average_change_rate(f0)
+        formants = formant_analysis(y_praat, gender)
 
-    # pitch
-    pitch_values, pitch_time = pitch_comp(y_praat)
-    duration_rising_pitch, duration_falling_pitch, value_rising_pitch, value_falling_pitch = rising_falling_slopes(
-        pitch_values, times=pitch_time)
+        # pitch
+        pitch_values, pitch_time = pitch_comp(y_praat)
+        duration_rising_pitch, duration_falling_pitch, value_rising_pitch, value_falling_pitch = rising_falling_slopes(
+            pitch_values, times=pitch_time)
 
-    # speaking rate, articulation rate, asd
-    speaking_dictionary = speech_rate(y_praat)
-    speaking_rate = speaking_dictionary['speechrate(nsyll / dur)']
-    articulation_rate = speaking_dictionary['articulation rate(nsyll / phonationtime)']
-    asd = speaking_dictionary['ASD(speakingtime / nsyll)']
+        # speaking rate, articulation rate, asd
+        speaking_dictionary = speech_rate(y_praat)
+        speaking_rate = speaking_dictionary['speechrate(nsyll / dur)']
+        articulation_rate = speaking_dictionary['articulation rate(nsyll / phonationtime)']
+        asd = speaking_dictionary['ASD(speakingtime / nsyll)']
 
-    # brightness (spectral centroid)
-    spectral_cent = spectral_centroid(y, sr)
+        # brightness (spectral centroid)
+        spectral_cent = spectral_centroid(y, sr)
 
-    # mfccs, lpccs, lpcmfccs, lfccs
-    mfccs, delta_mfccs, delta2_mfccs = mfcc_comp(y, sr, n=13)
-    lpccs_global = lpcc(y, lpc_order=12, cepsorder=12)
-    lpccs_local = lowlevel_lpcc_comp(y, lpc_order=12, cepsorder=12)
-    lpcmfccs_global = lpcmfcc_comp(lpccs_global)
-    lpcmfccs_local = lowlevel_lpcmfcc_comp(lpccs_local)
-    lfccs = lfcc_comp(y_torch, sr_torch, n_lfcc=12)
+        # mfccs, lpccs, lpcmfccs, lfccs
+        mfccs, delta_mfccs, delta2_mfccs = mfcc_comp(y, sr, n=13)
+        lpccs_global = lpcc(y, lpc_order=12, cepsorder=12)
+        lpccs_local = lowlevel_lpcc_comp(y, lpc_order=12, cepsorder=12)
+        lpcmfccs_global = lpcmfcc_comp(lpccs_global)
+        lpcmfccs_local = lowlevel_lpcmfcc_comp(lpccs_local)
+        lfccs = lfcc_comp(y_torch, sr_torch, n_lfcc=12)
 
-    features_dict = {'file': filename, 'label': label, 'speaker': speaker_num, 'gender': gender, 'duration': duration,
-                     'mean': mean, 'median': median, 'max': max, 'min': min, 'var': var, 'std': std, 'zcr': zcr,
-                     'energy': energy, 'energy_avg_change_rate': energy_avg_change_rate,
-                     'duration_rising_energy': duration_rising_energy,
-                     'duration_falling_energy': duration_falling_energy, 'value_rising_energy': value_rising_energy,
-                     'value_falling_energy': value_falling_energy, 'rms': rms_energy, 'log_rms': log_rms,
-                     'amplitude': amplitude, 'amplitude_avg_change_rate': amplitude_avg_change_rate,
-                     'lpc_global': lpc_global,
-                     'lpc_local': lpc_local,
-                     'spectral_entropy': spectral_ent, 'shannon_entropy': shannon_ent,
-                     'threshold_entropy': threshold_ent,
-                     'log_energy_entropy': log_energy_ent, 'sure_entropy': sure_ent, 'f0': f0, 'voiced': voiced_flag,
-                     'f0_avg_change_rate': f0_avg_change_rate, 'pitch': pitch_values, 'pitch_time': pitch_time,
-                     'duration_rising_pitch': duration_rising_pitch, 'duration_falling_pitch': duration_falling_pitch,
-                     'value_rising_pitch': value_rising_pitch, 'value_falling_pitch': value_falling_pitch,
-                     'speaking_rate': speaking_rate, 'articulation_rate': articulation_rate, 'asd': asd,
-                     'spectral_centroid': spectral_cent, 'mfccs': mfccs, 'delta_mfccs': delta_mfccs,
-                     'delta2_mfccs': delta2_mfccs, 'lpccs_local': lpccs_local, 'lpccs_global': lpccs_global,
-                     'lpcmfccs_global': lpcmfccs_global, 'lpcmfccs_local': lpcmfccs_local, 'lfccs': lfccs} | formants
+        features_dict = {'file': filename, 'label': label, 'speaker': speaker_num, 'gender': gender, 'duration': duration,
+                         'mean': mean, 'median': median, 'max': max, 'min': min, 'var': var, 'std': std, 'zcr': zcr,
+                         'energy': energy, 'energy_avg_change_rate': energy_avg_change_rate,
+                         'duration_rising_energy': duration_rising_energy,
+                         'duration_falling_energy': duration_falling_energy, 'value_rising_energy': value_rising_energy,
+                         'value_falling_energy': value_falling_energy, 'rms': rms_energy, 'log_rms': log_rms,
+                         'amplitude': amplitude, 'amplitude_avg_change_rate': amplitude_avg_change_rate,
+                         'lpc_global': lpc_global,
+                         'lpc_local': lpc_local,
+                         'spectral_entropy': spectral_ent, 'shannon_entropy': shannon_ent,
+                         'threshold_entropy': threshold_ent,
+                         'log_energy_entropy': log_energy_ent, 'sure_entropy': sure_ent, 'f0': f0, 'voiced': voiced_flag,
+                         'f0_avg_change_rate': f0_avg_change_rate, 'pitch': pitch_values, 'pitch_time': pitch_time,
+                         'duration_rising_pitch': duration_rising_pitch, 'duration_falling_pitch': duration_falling_pitch,
+                         'value_rising_pitch': value_rising_pitch, 'value_falling_pitch': value_falling_pitch,
+                         'speaking_rate': speaking_rate, 'articulation_rate': articulation_rate, 'asd': asd,
+                         'spectral_centroid': spectral_cent, 'mfccs': mfccs, 'delta_mfccs': delta_mfccs,
+                         'delta2_mfccs': delta2_mfccs, 'lpccs_local': lpccs_local, 'lpccs_global': lpccs_global,
+                         'lpcmfccs_global': lpcmfccs_global, 'lpcmfccs_local': lpcmfccs_local, 'lfccs': lfccs} | formants
 
-    return features_dict
+        return features_dict
+    else:
+        return None
 
-def run_all_files(data_path, result_path, result_name):
+def run_all_files(data_path, result_path, result_name, database):
     """
     Runs all files for feature extraction within the given path and saves a dataframe to the result path.
     :param data_path: path where the audio files are
@@ -701,7 +726,13 @@ def run_all_files(data_path, result_path, result_name):
     :param result_name: name of the resulting dataframe
     :return: dataframe with all files and features extracted
     """
-    audio_files = os.listdir(data_path)
+    if database == 'emodb':
+        audio_files = os.listdir(data_path)
+    elif database == 'ravdess':
+        audio_files = []
+        for root, dirs, files in os.walk(data_path):
+            for file in files:
+                audio_files.append(os.path.join(root, file))
 
     # create an final list to store all results and convert to dataframe
     final_list = []
@@ -709,8 +740,9 @@ def run_all_files(data_path, result_path, result_name):
     i = 0
     with progressbar.ProgressBar(max_value=len(audio_files)) as bar:
         for file in audio_files:
-            feature_dict = feature_extraction(file, data_path)
-            final_list.append(feature_dict)
+            feature_dict = feature_extraction(file, data_path, database)
+            if feature_dict != None:
+                final_list.append(feature_dict)
             i += 1
             bar.update(i)
 
@@ -799,7 +831,6 @@ def finalize_features(result_path, input_name, result_name):
 
     return df
 
-
-#run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features.pkl')
-finalize_features(result_path=result_path, input_name='extracted_features.pkl',
-                  result_name='extracted_features_modified_all_stats.pkl')
+run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features_ravdess.pkl', database='ravdess')
+finalize_features(result_path=result_path, input_name='extracted_features_ravdess.pkl',
+                  result_name='extracted_features_modified_all_stats_ravdess.pkl')
