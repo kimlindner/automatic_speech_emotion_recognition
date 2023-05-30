@@ -1,6 +1,7 @@
 # import packages
 import os
 from pathlib import Path
+import re
 import progressbar
 import math
 import numpy as np
@@ -15,7 +16,9 @@ import parselmouth
 from parselmouth.praat import call
 import torchaudio
 from torchaudio.transforms import LFCC
+import warnings
 
+#data_path = os.path.join(str(Path(__file__).parents[1]), 'data/iemocap')
 data_path = os.path.join(str(Path(__file__).parents[1]), 'data/ravdess')
 #data_path = os.path.join(str(Path(__file__).parents[1]), 'data/emodb/wav')
 result_path = os.path.join(str(Path(__file__).parents[1]), 'results')
@@ -284,7 +287,7 @@ def pitch_comp(y):
     pitch_time = pitch.xs()
     return pitch_values, pitch_time
 
-def formant_analysis(y, gender, formant_order=4, f0min = 75, f0max = 600):
+def  formant_analysis(y, gender, formant_order=4, f0min = 75, f0max = 600):
     """
     Computes the formants of the signal up to the given order with praat.
     :param y: praat audio signal
@@ -327,12 +330,25 @@ def formant_analysis(y, gender, formant_order=4, f0min = 75, f0max = 600):
                 form_dict['f' + str(order)].append(formant)
 
         # calculate statistics of the given formants
-        form_dict['f' + str(order) + '_median'] = np.median(form_dict['f' + str(order)])
-        form_dict['f' + str(order) + '_max'] = np.max(form_dict['f' + str(order)])
-        form_dict['f' + str(order) + '_mean'] = np.mean(form_dict['f' + str(order)])
-        form_dict['f' + str(order) + '_std'] = np.std(form_dict['f' + str(order)])
-        form_dict['f' + str(order) + '_var'] = np.var(form_dict['f' + str(order)])
-        form_dict['f' + str(order) + '_avg_change_rate'] = average_change_rate(form_dict['f' + str(order)])
+        # if praat does not find suitable num points, the formants will be empty. In order to keep automatic feature
+        # extraction, we can overwrite these values with nan and exclude the entries later on in preprocessing.
+        if form_dict['f' + str(order)] != []:
+            form_dict['f' + str(order) + '_median'] = np.median(form_dict['f' + str(order)])
+            form_dict['f' + str(order) + '_max'] = np.max(form_dict['f' + str(order)])
+            form_dict['f' + str(order) + '_mean'] = np.mean(form_dict['f' + str(order)])
+            form_dict['f' + str(order) + '_std'] = np.std(form_dict['f' + str(order)])
+            form_dict['f' + str(order) + '_var'] = np.var(form_dict['f' + str(order)])
+            form_dict['f' + str(order) + '_avg_change_rate'] = average_change_rate(form_dict['f' + str(order)])
+        else:
+            # in some files of iemocap the automatic formant extraction with praat is not working; hence we will assign
+            # nan values here and exclude them later
+            form_dict['f' + str(order)] = np.nan
+            form_dict['f' + str(order) + '_median'] = np.nan
+            form_dict['f' + str(order) + '_max'] = np.nan
+            form_dict['f' + str(order) + '_mean'] = np.nan
+            form_dict['f' + str(order) + '_std'] = np.nan
+            form_dict['f' + str(order) + '_var'] = np.nan
+            form_dict['f' + str(order) + '_avg_change_rate'] = np.nan
 
     return form_dict
 
@@ -371,7 +387,12 @@ def speech_rate(sound):
         threshold = min_intensity
 
     # get pauses (silences) and speakingtime
-    textgrid = call(intensity, "To TextGrid (silences)", threshold3, minpause, 0.1, "silent", "sounding")
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore")
+        # if the difference between loudest and softest sound is too low, we'll get a warning here which we want to
+        # suprress for now. Anyways, we will only use features that are relevant for the models later on. We can
+        # therefore still keep the feature even if the difference is low.
+        textgrid = call(intensity, "To TextGrid (silences)", threshold3, minpause, 0.1, "silent", "sounding")
     silencetier = call(textgrid, "Extract tier", 1)
     silencetable = call(silencetier, "Down to TableOfReal", "sounding")
     npauses = call(silencetable, "Get number of rows")
@@ -453,7 +474,10 @@ def speech_rate(sound):
     speakingrate = voicedcount / originaldur
     articulationrate = voicedcount / speakingtot
     npause = npauses - 1
-    asd = speakingtot / voicedcount
+    if voicedcount != 0:
+        asd = speakingtot / voicedcount
+    else:
+        asd = 0
     speechrate_dictionary = {'nsyll':voicedcount,
                              'npause': npause,
                              'dur(s)':originaldur,
@@ -600,40 +624,53 @@ def lfcc_comp(y, sr, n_lfcc, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH):
                                                                  'pad_mode': 'constant'})(y)
     return lfccs.numpy()[0] # convert tensor to numpy array
 
-def feature_extraction(filename, path, database):
+def feature_extraction(filename, path, database, file_label):
     """
     Extracts all necessary features per audio file.
     :param filename: name of the file
     :param path: path in which the file lies
+    :param database: name of the database used
+    :param label: string; label for iemocap already extracted; none for other databases
     :return: dictionary; with file name, label, and all computed features.
     """
     if database == 'emodb':
         audio_path = os.path.join(path, filename)
-    elif database == 'ravdess':
-        audio_path = filename
-        filename = filename.split('\\')[-1]
-    y, sr = librosa.load(audio_path, sr=None) # load librosa audio
-    y_praat = parselmouth.Sound(audio_path)  # load praat audio
-    y_torch, sr_torch = torchaudio.load(audio_path) # load torch audio
 
-    if database == 'emodb':
         # label and speaker information for emo db
         label_dict = {'W': 'anger', 'L': 'boredom', 'E': 'disgust', 'A': 'fear', 'F': 'happiness', 'T': 'sadness',
                       'N': 'neutral'}
         label = label_dict[filename[5]]
         speaker_num = filename[:2]
-        gender_dict = {'03': 'm', '08': 'f', '09': 'f', '10': 'm', '11': 'm', '12': 'm', '13': 'f', '14': 'f', '15': 'm',
+        gender_dict = {'03': 'm', '08': 'f', '09': 'f', '10': 'm', '11': 'm', '12': 'm', '13': 'f', '14': 'f',
+                       '15': 'm',
                        '16': 'f'}
         gender = gender_dict[speaker_num]
 
     elif database == 'ravdess':
+        audio_path = filename
+        filename = filename.split('\\')[-1]
+
         # label and speaker information for ravdess
         filename_list = filename.split('-')
-        label_dict = {'01': 'neutral', '02': 'calmness', '03': 'happiness', '04': 'sadness', '05': 'anger', '06': 'fear',
-                      '07': 'disgust', '08': 'surprise'}
+        label_dict = {'01': 'neutral', '02': 'calmness', '03': 'happiness', '04': 'sadness', '05': 'anger',
+                      '06': 'fear', '07': 'disgust', '08': 'surprise'}
         label = label_dict[filename_list[2]]
         speaker_num = filename_list[-1].split('.')[0]
         gender = 'm' if int(speaker_num) % 2 != 0 else 'f'
+
+    elif database == 'iemocap':
+        audio_path = filename
+        filename = filename.split('\\')[-1]
+
+        # label and speaker information for iemocap
+        label_dict = {'ang':'anger', 'dis':'disgust', 'fea':'fear', 'hap':'happiness', 'neu':'neutral', 'sad':'sadness'}
+        label = label_dict[file_label]
+        speaker_num = filename[3:5]
+        gender = filename[5].lower()
+
+    y, sr = librosa.load(audio_path, sr=None)  # load librosa audio
+    y_praat = parselmouth.Sound(audio_path)  # load praat audio
+    y_torch, sr_torch = torchaudio.load(audio_path)  # load torch audio
 
     # only extract data for the chosen 7 emotions
     if label in ['anger', 'boredom', 'disgust', 'fear', 'happiness', 'neutral', 'sadness']:
@@ -726,6 +763,8 @@ def run_all_files(data_path, result_path, result_name, database):
     :param result_name: name of the resulting dataframe
     :return: dataframe with all files and features extracted
     """
+    print('Start running for {}.'.format(database))
+
     if database == 'emodb':
         audio_files = os.listdir(data_path)
     elif database == 'ravdess':
@@ -733,6 +772,44 @@ def run_all_files(data_path, result_path, result_name, database):
         for root, dirs, files in os.walk(data_path):
             for file in files:
                 audio_files.append(os.path.join(root, file))
+    elif database == 'iemocap':
+        audio_files = []
+        for root, dirs, files in os.walk(data_path):
+            for file in files:
+                audio_files.append(os.path.join(root, file))
+
+        reg = re.compile(r'^(?=.*sentences)(?=.*script)(?!.*ForcedAlignment)(?=.*wav).*$')
+        audio_files = [file for file in audio_files if re.search(reg, file)]
+
+        # get the label for each audio file and save them in a dictionary
+        # (since label file contains label for several files)
+        label_files = []
+        for audio_file in audio_files:
+            file_name = audio_file.split('\\')[-1][:-9]
+            label_files.append(audio_file.split('\\sentences')[0] + '\dialog\EmoEvaluation\\'  + file_name + '.txt')
+
+        label_files = sorted(list(set(label_files))) # only get unique files
+        script_label_dict = {}
+        for label_file in label_files:
+            try:
+                with open(label_file) as f:
+                    lines = f.readlines()
+                lines_filtered = [line for line in lines if 'script' in line]
+                for line in lines_filtered:
+                    line_split = line.split('\t')
+                    script_label_dict[line_split[1]] = line_split[2]
+            except:
+                continue
+
+        # exclude files where the label was not unique, i.e. where the label on utterance level is given as 'xxx', as
+        # well as where the label is not coherent with the labels we are working with in emodb, i.e., excitement,
+        # frustration, other, and surprise
+        filtered_label_dict = {key: value for key, value in script_label_dict.items() if value not in ['xxx', 'exc', 'fru', 'oth', 'sur']}
+        valid_files = list(filtered_label_dict.keys())
+        # (additionally exclude '.pk' since there was one pickle file in session 3 which is not fitting to the rule)
+        audio_files = [file for file in audio_files if
+                       file.split('\\')[-1].split('.')[0] in valid_files and '.pk' not in file]
+
 
     # create an final list to store all results and convert to dataframe
     final_list = []
@@ -740,7 +817,14 @@ def run_all_files(data_path, result_path, result_name, database):
     i = 0
     with progressbar.ProgressBar(max_value=len(audio_files)) as bar:
         for file in audio_files:
-            feature_dict = feature_extraction(file, data_path, database)
+            if database == 'iemocap':
+                # need to extract filename for iemocap in order to get label beforehand since it is saved in a different
+                # file for several audios
+                file_name = file.split('\\')[-1].split('.')[0]
+                label = filtered_label_dict[file_name]
+            else:
+                label = None
+            feature_dict = feature_extraction(file, data_path, database, label)
             if feature_dict != None:
                 final_list.append(feature_dict)
             i += 1
@@ -782,11 +866,20 @@ def finalize_features(result_path, input_name, result_name):
     # calculate statistics for all
     for feature in list(df.columns):
         if (type(df[feature][0]) == list) or (type(df[feature][0]) == np.ndarray and df[feature][0].ndim == 1):
-            df[feature + '_max'] = df[feature].apply(lambda x: np.max(x))
-            df[feature + '_min'] = df[feature].apply(lambda x: np.min(x))
-            df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x))
-            df[feature + '_median'] = df[feature].apply(lambda x: np.median(x))
-            df[feature + '_var'] = df[feature].apply(lambda x: np.var(x))
+
+
+            # we have to make sure that the feature row is not an empty list or nan from the previous calculation
+            df[feature + '_max'] = df[feature].apply(lambda x: np.max(x) if (type(x) == list or type(x) == np.ndarray)
+                                                                            and len(x) != 0 else np.nan)
+            df[feature + '_min'] = df[feature].apply(lambda x: np.min(x) if (type(x) == list or type(x) == np.ndarray)
+                                                                            and len(x) != 0 else np.nan)
+            df[feature + '_mean'] = df[feature].apply(lambda x: np.mean(x) if (type(x) == list or type(x) == np.ndarray)
+                                                                              and len(x) != 0 else np.nan)
+            df[feature + '_median'] = df[feature].apply(lambda x: np.median(x) if (type(x) == list or type(x) == np.ndarray)
+                                                                                  and len(x) != 0 else np.nan)
+            df[feature + '_var'] = df[feature].apply(lambda x: np.var(x) if (type(x) == list or type(x) == np.ndarray)
+                                                                            and len(x) != 0 else np.nan)
+
         elif (type(df[feature][0]) == np.ndarray and df[feature][0].ndim == 2):
             # calculate statistics of cepstrum coefficients mfccs, lpccs, lpcmfccs, lpcs,..., i.e. multidimensional arrays
             for index, row in df.iterrows():
@@ -805,18 +898,23 @@ def finalize_features(result_path, input_name, result_name):
         for elem in ['duration', 'value']:
             # iqr for rising slopes of feature
             df[elem + '_rising_' + feature + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
-                *np.percentile(x, [75, 25])))
+                *np.percentile(x, [75, 25])) if (type(x) == list or type(x) == np.ndarray) and len(x) != 0 else np.nan)
 
             # iqr for falling slopes of feature
             df[elem + '_falling_' + feature + '_iqr'] = df[elem + '_rising_' + feature].apply(lambda x: np.subtract(
-                *np.percentile(x, [75, 25])))
+                *np.percentile(x, [75, 25])) if (type(x) == list or type(x) == np.ndarray) and len(x) != 0 else np.nan)
 
     # further stats for pitch, energy
     df['pitch_non0'] = df['pitch'].apply(lambda x: x[x != 0])
-    df['skew_log_pitch'] = df['pitch_non0'].apply(lambda x: skew(np.log(x)))
-    df['range_log_pitch'] = df['pitch_non0'].apply(lambda x: np.abs((np.max(x) - np.min(x))))
+    df['skew_log_pitch'] = df['pitch_non0'].apply(
+        lambda x: skew(np.log(x)) if (type(x) == list or type(x) == np.ndarray) and len(x) != 0 else np.nan)
+    df['range_log_pitch'] = df['pitch_non0'].apply(
+        lambda x: np.abs((np.max(x) - np.min(x))) if (type(x) == list or type(x) == np.ndarray) and len(
+            x) != 0 else np.nan)
     df['energy_non0'] = df['energy'].apply(lambda x: x[x != 0])
-    df['range_log_energy'] = df['energy_non0'].apply(lambda x: np.abs((np.max(x) - np.min(x))))
+    df['range_log_energy'] = df['energy_non0'].apply(
+        lambda x: np.abs((np.max(x) - np.min(x))) if (type(x) == list or type(x) == np.ndarray) and len(
+            x) != 0 else np.nan)
     df.drop(columns=['pitch_non0', 'energy_non0'], inplace=True)
 
     # remove columns that only have the same values (e.g. happens for energy_max for example)
@@ -831,6 +929,11 @@ def finalize_features(result_path, input_name, result_name):
 
     return df
 
-run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features_ravdess.pkl', database='ravdess')
-finalize_features(result_path=result_path, input_name='extracted_features_ravdess.pkl',
-                  result_name='extracted_features_modified_all_stats_ravdess.pkl')
+"""file = r'C:\\Users\\Kim-Carolin\\Documents\\GitHub\\automatic_speech_emotion_recognition\\data/iemocap\\IEMOCAP_full_release\\Session1\\sentences\\wav\\Ses01M_script02_1\\Ses01M_script02_1_F021.wav'
+file_name = file.split('\\')[-1].split('.')[0]
+label = 'neu'
+feature_extraction(file, data_path, 'iemocap', label)"""
+
+run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features_ravdess_check.pkl', database='ravdess')
+finalize_features(result_path=result_path, input_name='extracted_features_ravdess_check.pkl',
+                  result_name='extracted_features_modified_all_stats_ravdess_check.pkl')
