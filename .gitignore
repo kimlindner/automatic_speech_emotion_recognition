@@ -130,10 +130,32 @@ dmypy.json
 
 # data
 data/
+/ft_w2v2_ser/Dataset/
 
 # idea
 .idea
 
 # results
 results/
-notebooks/test_new.py
+
+# models 
+ft_w2v2_ser/model/
+
+# logs
+/ft_w2v2_ser/bin/downstream/checkpoints/
+/ft_w2v2_ser/bin/lightning_logs/
+
+######################################################### ft_w2v2_ser git ignores #####################################################
+
+# data
+/Dataset/
+
+# idea
+.idea
+
+# wav2vec file
+*.pt
+
+# logs
+/bin/downstream/checkpoints/
+/bin/lightning_logs/
