@@ -6,6 +6,7 @@ import progressbar
 import math
 import numpy as np
 import pandas as pd
+import pickle
 import sklearn
 import librosa
 import antropy as ant # for entropy computation
@@ -19,8 +20,8 @@ from torchaudio.transforms import LFCC
 import warnings
 
 #data_path = os.path.join(str(Path(__file__).parents[1]), 'data/iemocap')
-data_path = os.path.join(str(Path(__file__).parents[1]), 'data/ravdess')
-#data_path = os.path.join(str(Path(__file__).parents[1]), 'data/emodb/wav')
+#data_path = os.path.join(str(Path(__file__).parents[1]), 'data/ravdess')
+data_path = os.path.join(str(Path(__file__).parents[1]), 'data/emodb/wav')
 result_path = os.path.join(str(Path(__file__).parents[1]), 'results')
 
 HOP_LENGTH = 512
@@ -916,7 +917,17 @@ def finalize_features(result_path, input_name, result_name):
         lambda x: np.abs((np.max(x) - np.min(x))) if (type(x) == list or type(x) == np.ndarray) and len(
             x) != 0 else np.nan)
     df.drop(columns=['pitch_non0', 'energy_non0'], inplace=True)
+    
+    # select all columns that were used for the approaches (they are saved in a list in a pickle file) and save it inbetween
+    with open('../results/cols_approaches_feature_extraction.pkl', 'rb') as f:
+        cols_approaches = pickle.load(f)
+        
+    df_approaches = df[cols_approaches]
+    approaches_name = input_name.split('.')[0] + '_modified.pkl'
+    df_approaches.to_pickle(os.path.join(result_path, approaches_name))
+    print('Modified file with columns from the approaches written to {}.'.format(approaches_name))
 
+    # continue to create the file with all statistics
     # remove columns that only have the same values (e.g. happens for energy_max for example)
     print('Remove columns that only have the same values.')
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -925,15 +936,10 @@ def finalize_features(result_path, input_name, result_name):
     df.drop(cols_to_drop, axis=1, inplace=True) # drop the columns
 
     df.to_pickle(os.path.join(result_path, result_name))
-    print('Modified file written to {}.'.format(result_name))
+    print('Modified file with all statistics written to {}.'.format(result_name))
 
     return df
 
-"""file = r'C:\\Users\\Kim-Carolin\\Documents\\GitHub\\automatic_speech_emotion_recognition\\data/iemocap\\IEMOCAP_full_release\\Session1\\sentences\\wav\\Ses01M_script02_1\\Ses01M_script02_1_F021.wav'
-file_name = file.split('\\')[-1].split('.')[0]
-label = 'neu'
-feature_extraction(file, data_path, 'iemocap', label)"""
-
-run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features_ravdess_check.pkl', database='ravdess')
-finalize_features(result_path=result_path, input_name='extracted_features_ravdess_check.pkl',
-                  result_name='extracted_features_modified_all_stats_ravdess_check.pkl')
+run_all_files(data_path=data_path, result_path=result_path, result_name='extracted_features.pkl', database='emodb')
+finalize_features(result_path=result_path, input_name='extracted_features.pkl',
+                  result_name='extracted_features_modified_all_stats.pkl')
