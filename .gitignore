@@ -137,6 +137,7 @@ data/
 
 # results
 results/
+ft_w2v2_ser/output/
 
 # models 
 ft_w2v2_ser/model/
