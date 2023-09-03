@@ -136,7 +136,10 @@ data/
 .idea
 
 # results
-results/
+results/models/
+results/**/*.pkl
+results/**/*.svg
+results/**/*.png
 ft_w2v2_ser/output/
 
 # models 
