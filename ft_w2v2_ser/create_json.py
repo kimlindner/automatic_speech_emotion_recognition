@@ -1,12 +1,13 @@
 import os
 import json
 import pandas as pd
+from pathlib import Path
 from sklearn.model_selection import train_test_split, KFold
 
-data_path = r'C:\Users\Kim-Carolin\Documents\GitHub\automatic_speech_emotion_recognition\results'
-result_path = 'Dataset/emodb'
+data_path = os.path.join(str(Path(__file__).parents[1]), 'results')
+result_path = os.path.join(str(Path(__file__).parents[1]), 'ft_w2v2_ser/Dataset/emodb')
 DATABASE = 'emodb'
-def extract_file_info(path, k_folds=1):
+def extract_file_info(data_path, result_path, k_folds=1):
     """
     create a dataframe with file name
     """
@@ -55,9 +56,13 @@ def extract_file_info(path, k_folds=1):
             for index, row in df_test.iterrows():
                 test_dict[row['file']] = row['label']
                 file_dict['Test'] = test_dict
-
+    
             # save file as json dictionary
-            with open(result_path + f'/labels/{DATABASE}_info_fold_{k}.json', 'w') as fp:
+            label_path = result_path + '/labels'
+            if not os.path.exists(label_path):
+                os.makedirs(label_path)
+                
+            with open(label_path + f'/{DATABASE}_info_fold_{k}.json', 'w') as fp:
                 json.dump(file_dict, fp, indent=2)
 
             k+=1
@@ -87,5 +92,4 @@ def extract_file_info(path, k_folds=1):
     return file_dict
 
 
-file = extract_file_info(data_path, k_folds=5)
-test = 1
+file = extract_file_info(data_path, result_path, k_folds=5)
